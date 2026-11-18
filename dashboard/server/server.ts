@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { criarApp } from './app.ts';
+import { chaveHmacCpf } from './utils/cpf-hash.ts';
 import { config } from './config/env.ts';
 import { conectarBanco } from './db/client.ts';
 import { RepositorioContasPg } from './repositories/accounts.ts';
@@ -14,6 +15,7 @@ const app = criarApp({
   repositorios: { contas, monitoramento: new RepositorioMonitoramentoPg(sql), chaves: new RepositorioChavesPg(sql) },
   sessao: config.sessao,
   login: config.login,
+  chaveHmacCpf: chaveHmacCpf(process.env.CPF_HMAC_CHAVE),
   logger: true,
   // Built by `npm run build` (vite) into dashboard/web/dist.
   pastaWeb: fileURLToPath(new URL('../web/dist', import.meta.url)),

@@ -1,6 +1,7 @@
 // API entry point: wires session + service + routes and starts the server.
 
 import { criarApp } from './api/app.ts';
+import { chaveHmacCpf } from './audit/cpf-hash.ts';
 import { AuditoriaPg } from './audit/recorder.ts';
 import { agendarRetencao } from './audit/retention.ts';
 import { RepositorioChavesPg } from './auth/repository.ts';
@@ -15,7 +16,7 @@ import { ServicoProtocolosBroker } from './services/protocols.ts';
 const sql = conectarBanco(obrigatoria('DATABASE_URL'));
 const destinos = destinosDoAmbiente(process.env);
 const sessao = new SessaoBroker(config);
-const auditoria = new AuditoriaPg(sql);
+const auditoria = new AuditoriaPg(sql, chaveHmacCpf(process.env.CPF_HMAC_CHAVE));
 const app = criarApp(new ServicoProtocolosBroker(sessao), {
   logger: true,
   destinos,
@@ -41,7 +42,7 @@ try {
 
 await app.listen({ port: config.porta, host: config.host });
 
-app.log.info(`Retenção: logs de erro ${config.retencao.logsDias} dias, downloads ${config.retencao.downloadsDias} dias`);
+app.log.info(`Retenção: logs de erro ${config.retencao.logsDias} dias, downloads ${config.retencao.downloadsDias} dias, consultas ${config.retencao.consultasDias} dias`);
 const pararRetencao = agendarRetencao(sql, config.retencao);
 
 // Log in at startup so the first request doesn't pay that cost.

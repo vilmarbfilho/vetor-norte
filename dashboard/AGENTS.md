@@ -71,7 +71,7 @@ Rules:
 - **Errors**: show `useMensagemErro()(erro)`, which translates the backend `codigo` (`erro.<codigo>`). A new backend
   code needs `erro.<codigo>` in both dictionaries (the test lists the known codes).
 - `api.ts` imports types from `server/` (type-only, erased by Vite). Never import runtime server code in `web/`.
-- List pages keep filters in the URL (`useListagem`); dates are `YYYY-MM-DD` in the URL and become ISO instants of
+- List pages keep filters in the URL (`useListagem`), **except a full CPF** (Queries page keeps it in state only); dates are `YYYY-MM-DD` in the URL and become ISO instants of
   the user's local day only when calling the API (`consultaDaApi`).
 - The server serves `web/dist` with `@fastify/static` (wildcard, so a rebuild needs no restart), `/` explicitly,
   and `index.html` for other GETs without a file extension (client routes). Missing files are real 404s.
@@ -85,7 +85,8 @@ Rules:
 | Key format (`vn_` + 32 bytes base64url, prefix 11 chars, SHA-256 hex) | `server/auth/api-keys.ts` | `api/src/auth/keys.ts` |
 | Permissions list | `PERMISSOES` in `server/auth/api-keys.ts` | `PERMISSOES` in `api/src/auth/keys.ts` + DB CHECK |
 | CPF masking | `server/utils/mask.ts` | `api/src/audit/mask.ts` |
-| Tables | `usuarios`, `sessoes`, `api_keys` (write), `logs_erro` (read + write dashboard errors), `downloads_pdf` (read) | `api_keys` (read), `logs_erro`/`downloads_pdf` (write) |
+| CPF hash (HMAC-SHA256 hex of the 11 digits, key `CPF_HMAC_CHAVE`; fixed test vector in both test suites) | `server/utils/cpf-hash.ts` | `api/src/audit/cpf-hash.ts` |
+| Tables | `usuarios`, `sessoes`, `api_keys` (write), `logs_erro` (read + write dashboard errors), `downloads_pdf`, `consultas_protocolos` (read) | `api_keys` (read), `logs_erro`/`downloads_pdf`/`consultas_protocolos` (write) |
 
 Schema changes go in `../db/migrations` (new file, never edit an applied one).
 

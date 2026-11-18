@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { serializadoresLog } from './logger.ts';
+import { chaveHmacCpf, hashCpf } from './cpf-hash.ts';
 import { mascararCpf, textoSeguro } from './mask.ts';
 
 test('mascararCpf: formatado, só dígitos e dentro de URLs', () => {
@@ -31,4 +32,21 @@ test('serializadores do log do console mascaram URL e erros', () => {
   const err = serializadoresLog.err(new Error('falhou em txtCpfSegurado=529.982.247-25'));
   assert.equal(err.message, 'falhou em txtCpfSegurado=529.***.***-25');
   assert.ok(!err.stack.includes('982.247'));
+});
+
+test('hashCpf: igual com ou sem formatação, muda com a chave, não contém o CPF', () => {
+  const chave = 'k'.repeat(32);
+  const h = hashCpf('529.982.247-25', chave);
+  assert.match(h, /^[0-9a-f]{64}$/);
+  assert.equal(hashCpf('52998224725', chave), h);
+  assert.notEqual(hashCpf('52998224725', 'z'.repeat(32)), h);
+  assert.ok(!h.includes('52998224725'));
+  // Fixed vector: the dashboard (server/utils/cpf-hash.ts) must produce the same value.
+  assert.equal(h, 'a9032b49a90d0833a723bdbc00b3d0d0875a34eb27db967b9f4a761416f694f4');
+});
+
+test('chaveHmacCpf: exige 32+ caracteres', () => {
+  assert.throws(() => chaveHmacCpf(undefined), /CPF_HMAC_CHAVE/);
+  assert.throws(() => chaveHmacCpf('curta'), /mínimo 32/);
+  assert.equal(chaveHmacCpf('k'.repeat(32)), 'k'.repeat(32));
 });

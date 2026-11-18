@@ -6,6 +6,7 @@ import { Layout } from './components/Layout';
 import { useIdioma, type Idioma } from './i18n';
 import { Conta } from './pages/Account';
 import { Downloads } from './pages/Downloads';
+import { Consultas } from './pages/Queries';
 import { Chaves } from './pages/Keys';
 import { Login } from './pages/Login';
 import { Logs } from './pages/Logs';
@@ -41,7 +42,7 @@ export function App() {
 
   // "/" and unknown paths go to the first page.
   useEffect(() => {
-    if (usuario && !['/logs', '/downloads', '/chaves', '/conta'].includes(caminho)) navegar('/logs', { substituir: true });
+    if (usuario && !['/logs', '/consultas', '/downloads', '/chaves', '/conta'].includes(caminho)) navegar('/logs', { substituir: true });
   }, [usuario, caminho, navegar]);
 
   const mudarIdioma = (i: Idioma) => {
@@ -62,7 +63,8 @@ export function App() {
 
   return (
     <Layout usuario={usuario} aoSair={sair} aoMudarIdioma={mudarIdioma}>
-      {caminho === '/downloads' ? <Downloads key={caminho} />
+      {caminho === '/consultas' ? <Consultas key={caminho} />
+        : caminho === '/downloads' ? <Downloads key={caminho} />
         : caminho === '/chaves' ? <Chaves />
         : caminho === '/conta' ? <Conta usuario={usuario} aoMudarIdioma={mudarIdioma} />
         : <Logs key={caminho} />}

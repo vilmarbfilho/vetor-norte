@@ -37,5 +37,6 @@ export const config = {
     // LGPD: rows older than this are deleted daily.
     logsDias: inteiroPositivo('RETENCAO_LOGS_DIAS', 90),
     downloadsDias: inteiroPositivo('RETENCAO_DOWNLOADS_DIAS', 365),
+    consultasDias: inteiroPositivo('RETENCAO_CONSULTAS_DIAS', 90),
   },
 } as const;

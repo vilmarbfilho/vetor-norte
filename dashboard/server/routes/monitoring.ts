@@ -1,7 +1,8 @@
-// Read-only views over what the API recorded: error logs and PDF download history.
+// Read-only views over what the API recorded: error logs, PDF download history, protocol query history.
 
 import type { FastifyInstance } from 'fastify';
-import type { FiltrosDownloads, FiltrosLogs, RepositorioMonitoramento } from '../repositories/types.ts';
+import type { FiltrosConsultas, FiltrosDownloads, FiltrosLogs, RepositorioMonitoramento } from '../repositories/types.ts';
+import { hashCpf } from '../utils/cpf-hash.ts';
 
 const DATA_HORA = { type: 'string', format: 'date-time' } as const;
 const UUID = { type: 'string', format: 'uuid' } as const;
@@ -10,7 +11,8 @@ const PAGINACAO = {
   porPagina: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
 } as const;
 
-export function rotasMonitoramento(app: FastifyInstance, monitoramento: RepositorioMonitoramento): void {
+/** `chaveHmacCpf` = CPF_HMAC_CHAVE, the same key the API uses to hash CPFs in the query history. */
+export function rotasMonitoramento(app: FastifyInstance, monitoramento: RepositorioMonitoramento, chaveHmacCpf: string): void {
   app.get<{ Querystring: FiltrosLogs }>(
     '/api/logs',
     {
@@ -57,5 +59,29 @@ export function rotasMonitoramento(app: FastifyInstance, monitoramento: Reposito
       },
     },
     async (req) => monitoramento.listarDownloads(req.query),
+  );
+
+  app.get<{ Querystring: Omit<FiltrosConsultas, 'cpfHash'> & { cpf?: string } }>(
+    '/api/consultas',
+    {
+      schema: {
+        querystring: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            ...PAGINACAO, de: DATA_HORA, ate: DATA_HORA,
+            // Full CPF, formatted or not. Only its HMAC reaches the database query; console and error logs
+            // mask CPFs in URLs (app.ts serializers, textoSeguro).
+            cpf: { type: 'string', pattern: '^\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}$' },
+            protocolo: { type: 'string', pattern: '^\\d{1,20}$' },
+            resultado: { type: 'string', enum: ['ok', 'erro'] },
+            apiKeyId: UUID,
+          },
+        },
+      },
+    },
+    async (req) => {
+      const { cpf, ...filtros } = req.query;
+      return monitoramento.listarConsultas({ ...filtros, ...(cpf ? { cpfHash: hashCpf(cpf, chaveHmacCpf) } : {}) });
+    },
   );
 }

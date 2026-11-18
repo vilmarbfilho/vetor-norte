@@ -1,9 +1,9 @@
-// Error logs and PDF download history (written by the API, read here).
+// Error logs, PDF download history and protocol query history (written by the API, read here).
 
 import type { PendingQuery, Row, Sql } from 'postgres';
 import { textoSeguro } from '../utils/mask.ts';
 import type {
-  Download, FiltrosDownloads, FiltrosLogs, LogErro, LogErroDetalhado, Pagina,
+  Consulta, Download, FiltrosConsultas, FiltrosDownloads, FiltrosLogs, LogErro, LogErroDetalhado, Pagina,
   RegistroErroDashboard, RepositorioMonitoramento,
 } from './types.ts';
 
@@ -100,6 +100,49 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     const itens = linhas.map((l): Download => ({
       id: l.id, ocorridoEm: l.ocorrido_em.toISOString(), protocolo: l.protocolo, tipo: l.tipo, destino: l.destino,
       resultado: l.resultado, tamanhoBytes: l.tamanho_bytes, duracaoMs: l.duracao_ms,
+      apiKey: l.chave_id
+        ? {
+            id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo!,
+            criadaPor: l.usuario_id ? { id: l.usuario_id, nome: l.usuario_nome! } : null,
+          }
+        : null,
+    }));
+    return { itens, total, pagina: f.pagina, porPagina: f.porPagina };
+  }
+
+  async listarConsultas(f: FiltrosConsultas): Promise<Pagina<Consulta>> {
+    const sql = this.sql;
+    const c: Fragmento[] = [];
+    if (f.de) c.push(sql`q.ocorrido_em >= ${f.de}`);
+    if (f.ate) c.push(sql`q.ocorrido_em <= ${f.ate}`);
+    if (f.cpfHash) c.push(sql`q.cpf_hash = ${f.cpfHash}`);
+    if (f.protocolo) c.push(sql`q.protocolos @> ARRAY[${f.protocolo}]::text[]`);
+    if (f.resultado) c.push(sql`q.resultado = ${f.resultado}`);
+    if (f.apiKeyId) c.push(sql`q.api_key_id = ${f.apiKeyId}`);
+    const filtro = onde(sql, c);
+
+    const [{ total }] = (await sql<{ total: number }[]>`
+      SELECT count(*)::int AS total FROM consultas_protocolos q WHERE ${filtro}
+    `) as unknown as [{ total: number }];
+    const linhas = await sql<{
+      id: string; ocorrido_em: Date; cpf_mascarado: string; filtros: Record<string, string> | null;
+      resultado: Consulta['resultado']; quantidade: number | null; protocolos: string[]; duracao_ms: number | null;
+      chave_id: string | null; chave_nome: string | null; chave_prefixo: string | null;
+      usuario_id: string | null; usuario_nome: string | null;
+    }[]>`
+      SELECT q.id, q.ocorrido_em, q.cpf_mascarado, q.filtros, q.resultado, q.quantidade, q.protocolos, q.duracao_ms,
+             k.id AS chave_id, k.nome AS chave_nome, k.prefixo AS chave_prefixo,
+             u.id AS usuario_id, u.nome AS usuario_nome
+      FROM consultas_protocolos q
+      LEFT JOIN api_keys k ON k.id = q.api_key_id
+      LEFT JOIN usuarios u ON u.id = k.criado_por
+      WHERE ${filtro}
+      ORDER BY q.ocorrido_em DESC, q.id DESC
+      LIMIT ${f.porPagina} OFFSET ${(f.pagina - 1) * f.porPagina}
+    `;
+    const itens = linhas.map((l): Consulta => ({
+      id: l.id, ocorridoEm: l.ocorrido_em.toISOString(), cpfMascarado: l.cpf_mascarado, filtros: l.filtros,
+      resultado: l.resultado, quantidade: l.quantidade, protocolos: l.protocolos, duracaoMs: l.duracao_ms,
       apiKey: l.chave_id
         ? {
             id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo!,

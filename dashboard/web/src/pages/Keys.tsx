@@ -140,6 +140,7 @@ export function Chaves() {
                       </td>
                       <td>
                         <div className="acoes">
+                          <Link para={`/consultas?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verConsultas')}</Link>
                           <Link para={`/downloads?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verDownloads')}</Link>
                           <Link para={`/logs?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verLogs')}</Link>
                           {!c.revogadaEm && (

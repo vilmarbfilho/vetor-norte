@@ -1,10 +1,10 @@
 // Small fetch wrapper for the dashboard API: same-origin cookie, CSRF header, JSON, typed errors.
 import type {
-  ChaveApiResumo, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Usuario,
+  ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Usuario,
 } from '../../server/repositories/types.ts';
 import type { Permissao } from '../../server/auth/api-keys.ts';
 
-export type { ChaveApiResumo, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Permissao, Usuario };
+export type { ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Permissao, Usuario };
 
 /** API error: `codigo` is translated by the UI (erro.<codigo>). */
 export class ErroApi extends Error {
@@ -49,6 +49,7 @@ export const api = {
   alterarSenha: (senhaAtual: string, novaSenha: string) => chamar<void>('POST', '/auth/eu/senha', { senhaAtual, novaSenha }),
   logs: (q: URLSearchParams) => chamar<Pagina<LogErro>>('GET', `/logs?${q}`),
   log: (id: string) => chamar<LogErroDetalhado>('GET', `/logs/${encodeURIComponent(id)}`),
+  consultas: (q: URLSearchParams) => chamar<Pagina<Consulta>>('GET', `/consultas?${q}`),
   downloads: (q: URLSearchParams) => chamar<Pagina<Download>>('GET', `/downloads?${q}`),
   chaves: () => chamar<{ chaves: ChaveApiResumo[]; permissoesDisponiveis: Permissao[] }>('GET', '/chaves'),
   criarChave: (c: { nome: string; permissoes: Permissao[]; limitePorMinuto: number | null }) =>
