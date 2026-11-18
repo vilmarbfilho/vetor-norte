@@ -57,8 +57,9 @@ environment variables take precedence).
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `PORTAL_URL` | yes | — | Portal login URL (`https://portalacesso.redelojacorr.com.br/login`) |
-| `PORTAL_EMAIL` | yes | — | Portal login e-mail |
-| `PORTAL_SENHA` | yes | — | Portal password |
+| `CREDENCIAIS_CHAVE` | yes (server) | — | 32 bytes, base64. Decrypts the users' portal passwords saved in the dashboard. **Same value in `dashboard/.env`** |
+| `SESSAO_OCIOSA_MINUTOS` | no | `15` | A user's portal session is closed after this many idle minutes |
+| `SESSOES_MAX` | no | `5` | Max portal sessions open at once (one per user); the most idle one is closed to make room |
 | `HEADLESS` | no | `true` | `false` opens a visible browser (useful for development) |
 | `PORT` | no | `3000` | HTTP port |
 | `HOST` | no | `127.0.0.1` | Bind address. `0.0.0.0` exposes it on the network — only behind the HTTPS reverse proxy |
@@ -67,8 +68,6 @@ environment variables take precedence).
 | `DATABASE_URL` | yes (server, key CLI) | — | PostgreSQL URL, e.g. `postgres://vetornorte:<password>@127.0.0.1:5432/vetornorte` |
 | `RATE_LIMIT_HABILITADO` | no | `true` | `false` disables the per-key rate limit |
 | `RATE_LIMIT_POR_MINUTO` | no | `60` | Requests per minute for keys without their own limit |
-| `KEEPALIVE_HABILITADO` | no | `true` | `false` disables the portal session keep-alive |
-| `KEEPALIVE_INTERVALO_MINUTOS` | no | `10` | Idle minutes before the keep-alive checks/renews the session |
 | `RETENCAO_LOGS_DIAS` | no | `90` | Error logs older than this are deleted (daily) |
 | `RETENCAO_DOWNLOADS_DIAS` | no | `365` | PDF download history older than this is deleted (daily) |
 | `RETENCAO_CONSULTAS_DIAS` | no | `90` | Protocol query history older than this is deleted (daily) |
@@ -86,24 +85,31 @@ npm run dev     # watch mode (restarts on file changes)
 npm start       # normal mode
 ```
 
-On startup the server checks the database (it exits if PostgreSQL is unreachable or not migrated),
-then logs in to the portal once (~8 s). Subsequent requests reuse that session.
+On startup the server checks the database (it exits if PostgreSQL is unreachable or not migrated).
+
+**Portal sessions, one per user.** Each request runs in the portal with the credentials of the **API key's
+owner**, saved (encrypted) by that user or an admin on the dashboard's "Portal credentials" page:
+
+- The user's first request logs in (~8 s); the next ones reuse that session (one Chromium, one isolated
+  context per user, each with its own queue).
+- A session idle for `SESSAO_OCIOSA_MINUTOS` is closed. At most `SESSOES_MAX` are open; when a new one is
+  needed, the most idle one is closed.
+- Saving new credentials in the dashboard closes the old session; the next request logs in with them.
+- No credentials saved → `409 credenciais_nao_cadastradas`.
+- The portal **refuses** the login (wrong or expired password) → the credentials are marked **invalid**
+  (shown in the dashboard) and the API answers `409 credenciais_invalidas` **without trying again** until
+  the user saves the current password (repeated attempts could lock the portal account).
+- A successful login marks them **valid** and records the time.
+
 `Ctrl+C` / `SIGTERM` shuts down the server and the browser cleanly.
 
-**Keep-alive** (`KEEPALIVE_HABILITADO`): when the API has been idle for `KEEPALIVE_INTERVALO_MINUTOS`,
-it reloads the Broker dashboard (a light page, never a search) through the normal request queue.
-This keeps the portal session from expiring, so the first request after a quiet period does not pay
-for a new login. If the session had expired anyway, it logs in again. If that also fails (portal down,
-password changed), the failure goes to the error log (`logs_erro`, `detalhes.origem = "keepalive"`),
-so it shows up in the dashboard before a client request hits it. While the portal stays down,
-one entry is written per interval.
-
-There is also a standalone CLI (no HTTP), useful for debugging the scraper:
+There is also a standalone CLI (no HTTP, no database), useful for debugging the scraper. It asks the
+portal password at a hidden prompt (never pass it as an argument):
 
 ```bash
-npm run cli -- <cpf>                    # list protocols for a CPF
-npm run cli -- <cpf> <protocol>         # list and download that protocol's PDF
-npm run cli -- --protocolo <protocol>   # search by protocol number and download the PDF
+npm run cli -- --email <e-mail> <cpf>                    # list protocols for a CPF
+npm run cli -- --email <e-mail> <cpf> <protocol>         # list and download that protocol's PDF
+npm run cli -- --email <e-mail> --protocolo <protocol>   # search by protocol number and download the PDF
 ```
 
 ## Authentication (API keys)
@@ -123,16 +129,18 @@ Each key has a set of permissions:
 | `pdf:baixar` | `GET /protocolos/{protocolo}/pdf` |
 | `pdf:enviar` | `GET /destinos`, `POST /protocolos/{protocolo}/pdf/envios` |
 
-Until the dashboard exists, keys are managed with a CLI (needs `DATABASE_URL`):
+Keys are managed in the dashboard or with a CLI (needs `DATABASE_URL`). Every key belongs to a dashboard user:
 
 ```bash
-npm run chaves -- criar --nome "n8n produção" --permissoes protocolos:listar,pdf:baixar [--limite 30]
+npm run chaves -- criar --usuario someone@example.com --nome "n8n produção" --permissoes protocolos:listar,pdf:baixar [--limite 30]
 npm run chaves -- listar
 npm run chaves -- revogar <prefixo>      # e.g. vn_AfafDxwV (shown by "listar")
 ```
 
 - The full key is printed **once**, at creation. Only its SHA-256 hash is stored.
-- A revoked key stops working within ~10 s (lookups are cached for 10 s).
+- A revoked key stops working within ~10 s (lookups are cached for 10 s). So does every key of a **deactivated** user.
+- **Effective permissions** = the key's permissions limited to its owner's ceiling (`usuarios.permissoes_api`);
+  keys of admins are not limited. Each history row (downloads, queries, errors) records the key's owner.
 - **Rate limit** (`RATE_LIMIT_HABILITADO`): fixed one-minute window per key, in memory (resets on restart).
   The limit is the key's own `--limite`, or `RATE_LIMIT_POR_MINUTO`. Responses carry
   `X-RateLimit-Limit` / `X-RateLimit-Remaining`; over the limit → `429` with `Retry-After`.
@@ -169,10 +177,10 @@ Base URL: `http://127.0.0.1:3000`. All endpoints below require an API key, excep
 
 ### `GET /health`
 
-Session status. Public (no key), for container health checks.
+Public (no key), for container health checks. Shows only how many portal sessions are open (never whose).
 
 ```json
-{ "ok": true, "sessao": { "ativa": true, "abertaEm": "2026-11-18T00:48:12.903Z", "ultimaAtividadeEm": "2026-11-18T01:02:40.120Z" } }
+{ "ok": true, "sessao": { "sessoesAbertas": 1, "maximo": 5 } }
 ```
 
 ### `GET /protocolos`
@@ -321,6 +329,8 @@ small flow (n8n, Make, your own service) that maps this payload to your WhatsApp
 | `404` | `{"erro":"Protocolo não encontrado"}` | protocol number does not exist |
 | `404` | `{"erro":"Protocolo não possui PDF da Proposta"}` | protocol exists but has no PDF |
 | `400` | `{"erro":"Destino desconhecido","destinosDisponiveis":[...]}` | `destino` not configured (the portal is not called) |
+| `409` | `{"erro":"...","codigo":"credenciais_nao_cadastradas"}` | the key's owner has no portal credentials saved (dashboard → Portal credentials) |
+| `409` | `{"erro":"...","codigo":"credenciais_invalidas"}` | the portal refused the owner's credentials; no new login is attempted until they are updated in the dashboard |
 | `502` | `{"erro":"Falha ao entregar o PDF no destino","destino":"..."}` | destination unreachable, timed out or answered non-2xx |
 | `502` | `{"erro":"Falha ao consultar o portal. Tente novamente."}` | portal failed twice (the API already retried once with a fresh login) |
 
@@ -330,13 +340,14 @@ Measured against the real portal:
 
 | Operation | Time |
 |---|---|
-| Login at startup (once) | ~8 s |
+| Login (a user's first request, or after the session was idle) | ~8 s |
 | Listing by CPF (warm session) | ~1–2.5 s |
 | PDF download | ~3 s |
 | Invalid CPF | ~1 ms |
 
-Requests share **one** logged-in browser tab, so they are processed **one at a time** (queue).
-Expect roughly 20–60 operations/minute per instance.
+Each user's requests share **one** logged-in tab, so they are processed **one at a time** per user (queue);
+different users run in parallel. Expect roughly 20–60 operations/minute per user.
+409s (credentials) are not written to the error log nor to the query/download history: the portal was not queried.
 
 ## Testing
 
@@ -438,13 +449,13 @@ it only through a VPN / private network.
 | `Variável de ambiente ausente: ...` | Fill in `.env` (see `.env.example`). |
 | `browserType.launch: Executable doesn't exist` | Run `npx playwright install chromium` (same user / `PLAYWRIGHT_BROWSERS_PATH`). |
 | `502` on every request | Check credentials (log in manually), check `journalctl`, run the CLI with `HEADLESS=false` to watch it. |
-| Wrong/empty data after a portal update | The portal markup changed. Run `npm run cli -- <cpf>` and inspect `downloads/erros/*.png` and `downloads/debug/`. See `AGENTS.md` → "Portal knowledge". |
+| Wrong/empty data after a portal update | The portal markup changed. Run `npm run cli -- --email <e-mail> <cpf>` and inspect `downloads/erros/*.png` and `downloads/debug/`. See `AGENTS.md` → "Portal knowledge". |
 
 ## Project layout
 
 ```
 src/
-├── server.ts                 # entry point: session + service + HTTP server
+├── server.ts                 # entry point: sessions + service + HTTP server
 ├── api/app.ts                # Fastify routes, validation, error mapping, route permissions
 ├── auth/keys.ts              # key format, generation, SHA-256 hash, header parsing, permissions
 ├── auth/hook.ts              # onRequest hook: API key, permission (403), rate limit (429)
@@ -461,13 +472,17 @@ src/
 ├── delivery/types.ts         # Destino contract, Documento, ErroEntrega
 ├── delivery/webhook.ts       # generic webhook destination (JSON + base64)
 ├── delivery/registry.ts      # builds destinations from DESTINO_* env vars
-├── scraper/session.ts        # persistent logged-in browser, queue, retry
-├── scraper/keepalive.ts      # idle-time session keep-alive
+├── scraper/browser.ts        # one shared Chromium
+├── scraper/session.ts        # one user's logged-in context, queue, retry (no retry on a refused login)
+├── scraper/sessions.ts       # one session per user: credentials, status, idle close, SESSOES_MAX
+├── credentials/crypto.ts     # AES-256-GCM decryption of portal passwords (same format as the dashboard)
+├── credentials/repository.ts # reads credenciais_portal, records valid/invalid
 ├── scraper/portal.ts         # all portal-specific automation (selectors, URLs, parsing)
 ├── config/load.ts            # loads .env; `obrigatoria()`
 ├── config/env.ts             # server configuration
 ├── utils/cpf.ts              # CPF/CNPJ validation and formatting
-├── scripts/cli.ts            # standalone scraper CLI
+├── scripts/cli.ts            # standalone scraper CLI (--email + hidden password prompt)
+├── scripts/prompt.ts         # hidden password prompt
 ├── scripts/keys.ts           # API key CLI (criar / listar / revogar)
 ├── tests/auth-fakes.ts       # in-memory key repository for tests
 ├── tests/audit-fakes.ts      # in-memory audit recorder for tests

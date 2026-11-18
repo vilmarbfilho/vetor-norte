@@ -7,12 +7,21 @@ import { AuditoriaFake } from '../tests/audit-fakes.ts';
 import { CHAVE_TOTAL, RepositorioChavesFake } from '../tests/auth-fakes.ts';
 import { protocoloFake } from '../tests/fixtures.ts';
 import { aplicarFiltros } from '../services/filters.ts';
+import { ErroCredenciais } from '../scraper/sessions.ts';
 import type { ServicoProtocolos } from '../services/protocols.ts';
 import { criarApp } from './app.ts';
 
 let chamadasAoPortal = 0;
+const usuariosRecebidos: string[] = [];
+/** Simulates the session manager: these key owners have missing / refused portal credentials. */
+function verificarCredenciais(usuarioId: string) {
+  usuariosRecebidos.push(usuarioId);
+  if (usuarioId === 'usuario-sem-credenciais') throw new ErroCredenciais('credenciais_nao_cadastradas');
+  if (usuarioId === 'usuario-credencial-invalida') throw new ErroCredenciais('credenciais_invalidas');
+}
 const servicoFake: ServicoProtocolos = {
-  async listarPorCpf(cpf, filtros) {
+  async listarPorCpf(usuarioId, cpf, filtros) {
+    verificarCredenciais(usuarioId);
     chamadasAoPortal++;
     if (cpf.replace(/\D/g, '') === '11144477735') throw new Error('portal fora do ar');
     return aplicarFiltros(
@@ -20,14 +29,15 @@ const servicoFake: ServicoProtocolos = {
       filtros,
     );
   },
-  async obterPdf(numero) {
+  async obterPdf(usuarioId, numero) {
+    verificarCredenciais(usuarioId);
     chamadasAoPortal++;
     if (numero === '10') return { tipo: 'ok', protocolo: protocoloFake({ protocolo: '10' }), pdf: Buffer.from('%PDF-1.7 fake') };
     if (numero === '11') return { tipo: 'sem_pdf', protocolo: protocoloFake({ protocolo: '11' }) };
     if (numero === '99') throw new Error('portal fora do ar ao buscar txtCpfSegurado=529.982.247-25');
     return { tipo: 'nao_encontrado' };
   },
-  status: () => ({ ativa: true }),
+  status: () => ({ sessoesAbertas: 0, maximo: 5 }),
 };
 const entregas: { doc: Documento; pedido: PedidoEnvio }[] = [];
 const destinoFake: Destino = {
@@ -46,6 +56,8 @@ const destinoQuebrado: Destino = {
   },
 };
 const auditoria = new AuditoriaFake();
+const CHAVE_SEM_CREDENCIAIS = 'vn_teste_sem_credenciais';
+const CHAVE_CREDENCIAL_INVALIDA = 'vn_teste_credencial_invalida';
 const app = criarApp(servicoFake, {
   auditoria,
   destinos: new Map([
@@ -53,7 +65,10 @@ const app = criarApp(servicoFake, {
     ['quebrado', destinoQuebrado],
   ]),
   autenticacao: {
-    repositorio: new RepositorioChavesFake().adicionar(CHAVE_TOTAL, { id: 'total' }),
+    repositorio: new RepositorioChavesFake()
+      .adicionar(CHAVE_TOTAL, { id: 'total' })
+      .adicionar(CHAVE_SEM_CREDENCIAIS, { id: 'sem', usuarioId: 'usuario-sem-credenciais' })
+      .adicionar(CHAVE_CREDENCIAL_INVALIDA, { id: 'invalida', usuarioId: 'usuario-credencial-invalida' }),
     rateLimit: { habilitado: false, porMinutoPadrao: 60 },
   },
 });
@@ -200,6 +215,7 @@ test('histórico: cada pedido de PDF é registrado com tipo, resultado e chave',
     ],
   );
   assert.ok(auditoria.downloads.every((d) => d.duracaoMs >= 0));
+  assert.ok(auditoria.downloads.every((d) => d.usuarioId === 'usuario-teste'));
 });
 
 test('histórico de consultas: CPF, filtros, protocolos retornados, resultado e chave', async () => {
@@ -219,6 +235,7 @@ test('histórico de consultas: CPF, filtros, protocolos retornados, resultado e 
     ],
   );
   assert.ok(auditoria.consultas.every((c) => c.duracaoMs >= 0));
+  assert.ok(auditoria.consultas.every((c) => c.usuarioId === 'usuario-teste'));
 });
 
 test('log de erro: só respostas 5xx, com rota modelo, chave e detalhes', async () => {
@@ -235,7 +252,36 @@ test('log de erro: só respostas 5xx, com rota modelo, chave e detalhes', async 
   assert.equal(portal!.rota, '/protocolos/:protocolo/pdf');
   assert.equal(portal!.metodo, 'GET');
   assert.equal(portal!.apiKeyId, 'total');
+  assert.equal(portal!.usuarioId, 'usuario-teste');
   assert.match(portal!.mensagem, /portal fora do ar/);
   assert.ok(portal!.requestId);
   assert.equal(entrega!.detalhes!.destino, 'quebrado');
+});
+
+test('credenciais do portal: usa o dono da chave; ausentes/recusadas -> 409 sem log de erro nem histórico', async () => {
+  usuariosRecebidos.length = 0;
+  await requisitar('/protocolos?cpf=52998224725');
+  assert.deepEqual(usuariosRecebidos, ['usuario-teste']);
+
+  auditoria.limpar();
+  const comChave = (chave: string, o: InjectOptions) => app.inject({ ...o, headers: { 'x-api-key': chave } });
+  const casos = [
+    [CHAVE_SEM_CREDENCIAIS, 'credenciais_nao_cadastradas'],
+    [CHAVE_CREDENCIAL_INVALIDA, 'credenciais_invalidas'],
+  ] as const;
+  for (const [chave, codigo] of casos) {
+    for (const o of [
+      { url: '/protocolos?cpf=52998224725' },
+      { url: '/protocolos/10/pdf' },
+      { method: 'POST' as const, url: '/protocolos/10/pdf/envios', payload: { destino: 'teste' } },
+    ]) {
+      const r = await comChave(chave, o);
+      assert.equal(r.statusCode, 409, o.url);
+      assert.equal(r.json().codigo, codigo);
+      assert.match(r.json().erro, /dashboard/);
+    }
+  }
+  assert.equal(auditoria.erros.length, 0);
+  assert.equal(auditoria.downloads.length, 0);
+  assert.equal(auditoria.consultas.length, 0);
 });

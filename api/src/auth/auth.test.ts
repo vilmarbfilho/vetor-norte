@@ -19,7 +19,7 @@ const servico: ServicoProtocolos = {
     chamadasAoPortal++;
     return { tipo: 'ok', protocolo: protocoloFake(), pdf: Buffer.from('%PDF-1.7') };
   },
-  status: () => ({ ativa: true }),
+  status: () => ({ sessoesAbertas: 0, maximo: 5 }),
 };
 
 const LISTAGEM = '/protocolos?cpf=52998224725';

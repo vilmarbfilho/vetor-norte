@@ -11,6 +11,9 @@ export interface ChaveApi {
   id: string;
   nome: string;
   prefixo: string;
+  /** Owner: their portal credentials are used, and their history rows carry this id. */
+  usuarioId: string;
+  /** Effective permissions: the key's, limited to the owner's ceiling (unless the owner is an admin). */
   permissoes: Permissao[];
   /** Requests per minute for this key; null = global default (RATE_LIMIT_POR_MINUTO). */
   limitePorMinuto: number | null;

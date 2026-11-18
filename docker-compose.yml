@@ -9,6 +9,8 @@ x-banco: &banco
   DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   # Same key in API (writes CPF hashes) and dashboard (searches by them). Required by both servers.
   CPF_HMAC_CHAVE: ${CPF_HMAC_CHAVE:-}
+  # Same key in dashboard (encrypts portal passwords) and API (decrypts them to log in). Required by both.
+  CREDENCIAIS_CHAVE: ${CREDENCIAIS_CHAVE:-}
 
 services:
   postgres:

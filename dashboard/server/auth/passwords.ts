@@ -31,3 +31,11 @@ export async function verificarSenha(senha: string, armazenado: string): Promise
 /** Hash of a random password, used to spend the same time when the e-mail does not exist
  *  (so response time does not reveal which e-mails are registered). */
 export const HASH_FICTICIO = await hashSenha(randomBytes(16).toString('hex'));
+
+/**
+ * Temporary password for users created or reset by an admin (shown once, must be changed at the next
+ * login). 12 random bytes in base64url = 16 characters, 96 bits.
+ */
+export function gerarSenhaTemporaria(): string {
+  return randomBytes(12).toString('base64url');
+}

@@ -2,7 +2,8 @@
 // so they don't end up in shell history or the process list).
 //
 // Usage (locally: inside dashboard/; on the VPS: docker compose exec dashboard npm run usuarios -- ...):
-//   npm run usuarios -- criar --nome "<name>" --email <e-mail>
+//   npm run usuarios -- criar --nome "<name>" --email <e-mail> --perfil admin|corretor
+//     (a corretor starts with no screens and no API permissions: an admin grants them in the dashboard)
 //   npm run usuarios -- listar
 //   npm run usuarios -- redefinir-senha <e-mail>
 //   npm run usuarios -- desativar <e-mail>      (also ends the user's open sessions)
@@ -10,13 +11,14 @@
 
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { PERFIS, type Perfil } from '../auth/access.ts';
 import { hashSenha, SENHA_MIN } from '../auth/passwords.ts';
 // Only load.ts: this tool needs DATABASE_URL, not the server config.
 import { obrigatoria } from '../config/load.ts';
 import { conectarBanco } from '../db/client.ts';
 
 const USO = `Uso:
-  npm run usuarios -- criar --nome "<nome>" --email <e-mail>
+  npm run usuarios -- criar --nome "<nome>" --email <e-mail> --perfil admin|corretor
   npm run usuarios -- listar
   npm run usuarios -- redefinir-senha <e-mail>
   npm run usuarios -- desativar <e-mail>
@@ -77,7 +79,7 @@ async function lerNovaSenha(): Promise<string> {
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
-  options: { nome: { type: 'string' }, email: { type: 'string' } },
+  options: { nome: { type: 'string' }, email: { type: 'string' }, perfil: { type: 'string' } },
 });
 const [comando, argumento] = positionals;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -90,22 +92,25 @@ try {
       const email = values.email?.trim().toLowerCase();
       if (!nome) falhar('Informe --nome.');
       if (!email || !EMAIL.test(email)) falhar('Informe um --email válido.');
+      const perfil = values.perfil as Perfil | undefined;
+      if (!perfil || !PERFIS.includes(perfil)) falhar(`Informe --perfil (${PERFIS.join(' ou ')}).`);
       const [existente] = await sql`SELECT 1 FROM usuarios WHERE lower(email) = ${email}`;
       if (existente) falhar(`Já existe um usuário com o e-mail ${email}.`);
       const senhaHash = await hashSenha(await lerNovaSenha());
-      await sql`INSERT INTO usuarios (nome, email, senha_hash) VALUES (${nome}, ${email}, ${senhaHash})`;
-      console.log(`Usuário "${nome}" <${email}> criado.`);
+      // The password was typed here (not generated), so no forced change at the first login.
+      await sql`INSERT INTO usuarios (nome, email, senha_hash, perfil) VALUES (${nome}, ${email}, ${senhaHash}, ${perfil})`;
+      console.log(`Usuário "${nome}" <${email}> criado (${perfil}).`);
       break;
     }
     case 'listar': {
       const linhas = await sql<
-        { nome: string; email: string; ativo: boolean; idioma: string; criado_em: Date; ultimo_login: Date | null }[]
-      >`SELECT nome, email, ativo, idioma, criado_em, ultimo_login FROM usuarios ORDER BY criado_em`;
+        { nome: string; email: string; perfil: string; ativo: boolean; idioma: string; criado_em: Date; ultimo_login: Date | null }[]
+      >`SELECT nome, email, perfil, ativo, idioma, criado_em, ultimo_login FROM usuarios ORDER BY criado_em`;
       if (linhas.length === 0) console.log('Nenhum usuário cadastrado.');
       const data = (d: Date | null) => (d ? d.toLocaleString('pt-BR') : '-');
       console.table(
         linhas.map((l) => ({
-          nome: l.nome, email: l.email, status: l.ativo ? 'ativo' : 'desativado', idioma: l.idioma,
+          nome: l.nome, email: l.email, perfil: l.perfil, status: l.ativo ? 'ativo' : 'desativado', idioma: l.idioma,
           criado: data(l.criado_em), 'último login': data(l.ultimo_login),
         })),
       );
@@ -116,7 +121,7 @@ try {
       const [u] = await sql<{ id: string }[]>`SELECT id FROM usuarios WHERE lower(email) = lower(${argumento})`;
       if (!u) falhar(`Usuário ${argumento} não encontrado.`);
       const senhaHash = await hashSenha(await lerNovaSenha());
-      await sql`UPDATE usuarios SET senha_hash = ${senhaHash} WHERE id = ${u.id}`;
+      await sql`UPDATE usuarios SET senha_hash = ${senhaHash}, trocar_senha = false WHERE id = ${u.id}`;
       // A password reset usually means the old one may be known: end every open session.
       await sql`DELETE FROM sessoes WHERE usuario_id = ${u.id}`;
       console.log(`Senha de ${argumento} redefinida. Sessões abertas foram encerradas.`);

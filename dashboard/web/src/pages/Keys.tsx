@@ -1,31 +1,58 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { api, type ChaveApiResumo, type Permissao } from '../api';
+import { api, type ChaveApiResumo, type Permissao, type UsuarioResumo } from '../api';
+import { ehAdmin, podeAcessar, tetoPermissoes } from '../acesso';
 import { Alerta, BotaoCopiar, CabecalhoPagina, Carregando, Modal, Selo, useMensagemErro } from '../components/ui';
 import { formatarDataHora } from '../format';
 import { useIdioma } from '../i18n';
-import { Link } from '../router';
+import { Link, useRota } from '../router';
+import { useListaUsuarios, useUsuarioAtual } from '../sessao';
 
-interface FormChave { nome: string; permissoes: Permissao[]; limite: string }
+interface FormChave { nome: string; permissoes: Permissao[]; limite: string; usuarioId: string }
+interface ChaveSalva { nome: string; permissoes: Permissao[]; limitePorMinuto?: number | null; usuarioId?: string }
 
-function FormularioChave({ inicial, permissoes, aoSalvar, aoCancelar, textoSalvar }: {
-  inicial: FormChave; permissoes: Permissao[]; textoSalvar: string;
-  aoSalvar: (f: { nome: string; permissoes: Permissao[]; limitePorMinuto: number | null }) => Promise<void>;
+/**
+ * Create/edit form. Admins also pick the owner (create only) and the rate limit. The permission
+ * options are the owner's ceiling: the server rejects anything outside it.
+ */
+function FormularioChave({ inicial, aoSalvar, aoCancelar, textoSalvar, criando, tetoCorretor }: {
+  inicial: FormChave; textoSalvar: string; criando: boolean;
+  /** The logged-in corretor's ceiling (from GET /chaves). */
+  tetoCorretor: Permissao[];
+  aoSalvar: (f: ChaveSalva) => Promise<void>;
   aoCancelar: () => void;
 }) {
   const { t } = useIdioma();
   const mensagemErro = useMensagemErro();
+  const eu = useUsuarioAtual();
+  const admin = ehAdmin(eu);
+  const usuarios = useListaUsuarios();
   const [f, setF] = useState(inicial);
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
+
+  const dono: Pick<UsuarioResumo, 'perfil' | 'permissoesApi'> | undefined =
+    admin ? usuarios.find((u) => u.id === f.usuarioId) : eu;
+  const permissoes = !admin ? tetoCorretor : dono ? tetoPermissoes(dono) : [];
   const alternar = (p: Permissao) =>
     setF({ ...f, permissoes: f.permissoes.includes(p) ? f.permissoes.filter((x) => x !== p) : [...f.permissoes, p] });
+  // Changing the owner may shrink the options: drop what the new owner cannot have.
+  const mudarDono = (usuarioId: string) => {
+    const novo = usuarios.find((u) => u.id === usuarioId);
+    const teto = novo ? tetoPermissoes(novo) : [];
+    setF({ ...f, usuarioId, permissoes: f.permissoes.filter((p) => teto.includes(p)) });
+  };
 
   const enviar = async (e: FormEvent) => {
     e.preventDefault();
     setSalvando(true);
     setErro('');
     try {
-      await aoSalvar({ nome: f.nome.trim(), permissoes: f.permissoes, limitePorMinuto: f.limite ? Number(f.limite) : null });
+      await aoSalvar({
+        nome: f.nome.trim(), permissoes: f.permissoes,
+        // Only admins may send these fields (the server answers 403 otherwise).
+        ...(admin ? { limitePorMinuto: f.limite ? Number(f.limite) : null } : {}),
+        ...(admin && criando ? { usuarioId: f.usuarioId } : {}),
+      });
     } catch (err) {
       setErro(mensagemErro(err));
     } finally {
@@ -40,8 +67,20 @@ function FormularioChave({ inicial, permissoes, aoSalvar, aoCancelar, textoSalva
         <span>{t('chaves.nome')}</span>
         <input required maxLength={100} value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} autoFocus />
       </label>
+      {admin && criando && (
+        <label className="campo">
+          <span>{t('chaves.dono')}</span>
+          <select value={f.usuarioId} onChange={(e) => mudarDono(e.target.value)}>
+            {usuarios.filter((u) => u.ativo).map((u) => (
+              <option key={u.id} value={u.id}>{u.nome} ({t(`perfil.${u.perfil}`)})</option>
+            ))}
+          </select>
+          <small className="sutil">{t('chaves.donoAjuda')}</small>
+        </label>
+      )}
       <fieldset className="campo">
         <legend>{t('chaves.permissoes')}</legend>
+        {permissoes.length === 0 && <p className="sutil">{t('chaves.semPermissoes')}</p>}
         {permissoes.map((p) => (
           <label key={p} className="opcao">
             <input type="checkbox" checked={f.permissoes.includes(p)} onChange={() => alternar(p)} />
@@ -52,11 +91,13 @@ function FormularioChave({ inicial, permissoes, aoSalvar, aoCancelar, textoSalva
           </label>
         ))}
       </fieldset>
-      <label className="campo">
-        <span>{t('chaves.limite')}</span>
-        <input type="number" min={1} max={10000} placeholder={t('chaves.limitePadrao')} value={f.limite} onChange={(e) => setF({ ...f, limite: e.target.value })} />
-        <small className="sutil">{t('chaves.limiteAjuda')}</small>
-      </label>
+      {admin && (
+        <label className="campo">
+          <span>{t('chaves.limite')}</span>
+          <input type="number" min={1} max={10000} placeholder={t('chaves.limitePadrao')} value={f.limite} onChange={(e) => setF({ ...f, limite: e.target.value })} />
+          <small className="sutil">{t('chaves.limiteAjuda')}</small>
+        </label>
+      )}
       <div className="modal-rodape">
         <button type="button" className="botao" onClick={aoCancelar}>{t('comum.cancelar')}</button>
         <button type="submit" className="botao botao-primario" disabled={salvando || f.permissoes.length === 0 || !f.nome.trim()}>
@@ -70,8 +111,14 @@ function FormularioChave({ inicial, permissoes, aoSalvar, aoCancelar, textoSalva
 export function Chaves() {
   const { t, locale } = useIdioma();
   const mensagemErro = useMensagemErro();
+  const eu = useUsuarioAtual();
+  const admin = ehAdmin(eu);
+  const usuarios = useListaUsuarios();
+  const { busca, navegar } = useRota();
+  // Owner filter (admins), kept in the URL so the Users page can link to "keys of this user".
+  const filtroDono = admin ? busca.get('usuarioId') ?? '' : '';
   const [chaves, setChaves] = useState<ChaveApiResumo[] | null>(null);
-  const [permissoes, setPermissoes] = useState<Permissao[]>([]);
+  const [tetoCorretor, setTetoCorretor] = useState<Permissao[]>([]);
   const [erro, setErro] = useState('');
   const [criando, setCriando] = useState(false);
   const [editando, setEditando] = useState<ChaveApiResumo | null>(null);
@@ -79,15 +126,15 @@ export function Chaves() {
   const [segredo, setSegredo] = useState<string | null>(null);
 
   const carregar = useCallback(() => {
-    api.chaves()
+    api.chaves(filtroDono || undefined)
       .then((r) => {
         setChaves(r.chaves);
-        setPermissoes(r.permissoesDisponiveis);
+        setTetoCorretor(r.permissoesDisponiveis);
       })
       .catch((e) => setErro(mensagemErro(e)));
-  }, [mensagemErro]);
-  // Load once on mount (carregar changes identity with the language).
-  useEffect(carregar, []);
+    // Reload only when the owner filter changes (mensagemErro changes identity with the language).
+  }, [filtroDono]);
+  useEffect(carregar, [carregar]);
 
   const revogar = async () => {
     if (!revogando) return;
@@ -105,9 +152,20 @@ export function Chaves() {
     <>
       <CabecalhoPagina
         titulo={t('chaves.titulo')}
-        descricao={t('chaves.descricao')}
+        descricao={t(admin ? 'chaves.descricao' : 'chaves.descricaoCorretor')}
         acao={<button type="button" className="botao botao-primario" onClick={() => setCriando(true)}>{t('chaves.nova')}</button>}
       />
+      {admin && (
+        <div className="filtros">
+          <label className="campo">
+            <span>{t('chaves.dono')}</span>
+            <select value={filtroDono} onChange={(e) => navegar(e.target.value ? `/chaves?usuarioId=${e.target.value}` : '/chaves')}>
+              <option value="">{t('comum.todos')}</option>
+              {usuarios.map((u) => <option key={u.id} value={u.id}>{u.nome}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
       <Alerta>{erro}</Alerta>
       {!chaves ? <Carregando /> : (
         <section className="cartao tabela-cartao">
@@ -116,7 +174,8 @@ export function Chaves() {
               <table>
                 <thead>
                   <tr>
-                    <th>{t('chaves.nome')}</th><th>{t('chaves.permissoes')}</th><th className="num">{t('chaves.limite')}</th>
+                    <th>{t('chaves.nome')}</th>{admin && <th>{t('chaves.dono')}</th>}<th>{t('chaves.permissoes')}</th>
+                    <th className="num">{t('chaves.limite')}</th>
                     <th>{t('chaves.criada')}</th><th>{t('chaves.ultimoUso')}</th><th>{t('chaves.status')}</th><th />
                   </tr>
                 </thead>
@@ -124,7 +183,11 @@ export function Chaves() {
                   {chaves.map((c) => (
                     <tr key={c.id} className={c.revogadaEm ? 'linha-inativa' : undefined}>
                       <td><strong>{c.nome}</strong><div className="mono sutil">{c.prefixo}…</div></td>
-                      <td><div className="chips">{c.permissoes.map((p) => <Selo key={p} tom="info">{t(`chaves.permissao.${p}`)}</Selo>)}</div></td>
+                      {admin && <td>{c.dono.nome}</td>}
+                      <td>
+                        <div className="chips">{c.permissoes.map((p) => <Selo key={p} tom="info">{t(`chaves.permissao.${p}`)}</Selo>)}</div>
+                        {c.permissoes.length === 0 && <span className="sutil">{t('chaves.semPermissaoAtiva')}</span>}
+                      </td>
                       <td className="num">{c.limitePorMinuto ?? <span className="sutil">{t('chaves.limitePadrao')}</span>}</td>
                       <td className="nowrap">
                         {formatarDataHora(c.criadaEm, locale)}
@@ -140,9 +203,9 @@ export function Chaves() {
                       </td>
                       <td>
                         <div className="acoes">
-                          <Link para={`/consultas?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verConsultas')}</Link>
-                          <Link para={`/downloads?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verDownloads')}</Link>
-                          <Link para={`/logs?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verLogs')}</Link>
+                          {podeAcessar(eu, 'consultas') && <Link para={`/consultas?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verConsultas')}</Link>}
+                          {podeAcessar(eu, 'downloads') && <Link para={`/downloads?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verDownloads')}</Link>}
+                          {admin && <Link para={`/logs?apiKeyId=${c.id}`} className="botao-link">{t('chaves.verLogs')}</Link>}
                           {!c.revogadaEm && (
                             <>
                               <button type="button" className="botao-link" onClick={() => setEditando(c)}>{t('chaves.editar')}</button>
@@ -162,8 +225,9 @@ export function Chaves() {
 
       <Modal titulo={t('chaves.novaTitulo')} aberto={criando} aoFechar={() => setCriando(false)}>
         <FormularioChave
-          inicial={{ nome: '', permissoes: [], limite: '' }}
-          permissoes={permissoes}
+          inicial={{ nome: '', permissoes: [], limite: '', usuarioId: filtroDono || eu.id }}
+          criando
+          tetoCorretor={tetoCorretor}
           textoSalvar={t('chaves.criar')}
           aoCancelar={() => setCriando(false)}
           aoSalvar={async (f) => {
@@ -178,8 +242,12 @@ export function Chaves() {
       <Modal titulo={t('chaves.editarTitulo')} aberto={Boolean(editando)} aoFechar={() => setEditando(null)}>
         {editando && (
           <FormularioChave
-            inicial={{ nome: editando.nome, permissoes: editando.permissoes, limite: editando.limitePorMinuto?.toString() ?? '' }}
-            permissoes={permissoes}
+            inicial={{
+              nome: editando.nome, permissoes: editando.permissoes,
+              limite: editando.limitePorMinuto?.toString() ?? '', usuarioId: editando.dono.id,
+            }}
+            criando={false}
+            tetoCorretor={tetoCorretor}
             textoSalvar={t('comum.salvar')}
             aoCancelar={() => setEditando(null)}
             aoSalvar={async (f) => {

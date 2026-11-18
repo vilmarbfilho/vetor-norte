@@ -17,7 +17,7 @@ Endpoints (see README for the full contract):
 - `GET /protocolos?cpf=...&<filters>` — all insurance protocols of a CPF, filtered in memory.
 - `GET /protocolos/{protocolo}/pdf[?formato=base64]` — the protocol's "PDF da Proposta" (binary or JSON).
 - `GET /destinos` / `POST /protocolos/{protocolo}/pdf/envios` — push the PDF to a configured destination.
-- `GET /health` — session status.
+- `GET /health` — number of open portal sessions.
 
 ## 2. Working agreement with the project owner
 
@@ -35,10 +35,12 @@ Endpoints (see README for the full contract):
   6. PostgreSQL + migrations (root `docker-compose.yml`, `../db/migrations`).
   7. API key authentication, per-key permissions, rate limit — `src/auth`, `src/scripts/keys.ts`.
   8. Error log + PDF download history in PostgreSQL, CPF masking, retention — `src/audit`.
-  9. Portal session keep-alive (toggle) — `src/scraper/keepalive.ts`, `verificarSessao` in `portal.ts`
-     (awaiting user confirmation).
+  9. Portal session keep-alive (removed in stage 17).
+  (Stages 10–16: dashboard, Docker, profiles and portal credentials; see the root `AGENTS.md`.)
+  17. One portal session per user with the user's own encrypted credentials — `src/scraper/sessions.ts`,
+      `src/credentials`. Stage 18: docs and deploy.
 - **Do not commit** unless asked. The user commits themselves.
-- When the user authorizes it, you may run against the real portal (credentials are in `.env`).
+- When the user authorizes it, you may run against the real portal (CLI: `--email` + hidden prompt, typed by the user).
   Prefer `HEADLESS=true`. Never print or persist credentials, and mask personal data in output.
 
 ## 3. Stack and commands
@@ -57,8 +59,8 @@ npm run dev        # API in watch mode
 npm start          # API
 npm test           # unit + HTTP tests (fake service, no browser)
 npm run typecheck  # tsc --noEmit — must be clean before handing work back
-npm run cli -- <cpf> [protocolo] | --protocolo <n>   # scraper CLI (no DB needed)
-npm run chaves -- criar|listar|revogar ...          # API key CLI (needs DATABASE_URL)
+npm run cli -- --email <e-mail> <cpf> [protocolo] | --protocolo <n>   # scraper CLI (no DB; hidden password prompt)
+npm run chaves -- criar --usuario <e-mail> ...|listar|revogar   # API key CLI (needs DATABASE_URL)
 # `npm run etapa2 -- ...` is kept as an alias of `npm run cli -- ...`
 ```
 
@@ -80,9 +82,12 @@ src/services/protocols.ts    ServicoProtocolos interface + ServicoProtocolosBrok
    │                         listarPorCpf = buscarProtocolos(documento) + aplicarFiltros (filters.ts)
    │                         obterPdf     = buscarProtocolos(protocolo) + baixarPdfProposta
    ▼
-src/scraper/session.ts    SessaoBroker: one browser + one logged-in Broker tab.
+src/scraper/sessions.ts   GerenciadorSessoes: one SessaoBroker per user (key owner), credentials from the DB,
+   │                      status valida/invalida, idle close, SESSOES_MAX. ErroCredenciais → 409.
+   ▼
+src/scraper/session.ts    SessaoBroker: one user's context (shared Chromium) + one logged-in Broker tab.
    │                      executar(op) runs ops in a FIFO queue (one at a time);
-   │                      on any error: discard session, re-login, retry ONCE.
+   │                      on any error: discard context, re-login, retry ONCE (never on ErroLoginRecusado).
    ▼
 src/scraper/portal.ts     Everything portal-specific: login, abrirBroker, overlay handlers,
                           buscarProtocolos (URL building + pagination), extrairTabela (DOM parsing),
@@ -114,11 +119,14 @@ Authentication (stage 7):
 - `criarApp` requires `autenticacao` (there is no unauthenticated mode). Tests use `RepositorioChavesFake`
   (`src/tests/auth-fakes.ts`); route tests send `CHAVE_TOTAL`.
 - `RepositorioChavesPg` caches lookups (found and not found) for 10 s, so revocation takes up to 10 s.
+- Every key has an owner (`api_keys.usuario_id`, stage 14). The lookup joins `usuarios`: a deactivated owner → 401,
+  and `ChaveApi.permissoes` is already the **effective** set (key ∩ owner's `permissoes_api`; admins unlimited).
+  `ChaveApi.usuarioId` goes to every history/error row (`usuarioId` in `RegistroErro/Download/Consulta`).
   `ultimo_uso_em` is written at most once a minute per key, fire-and-forget.
 - DB failure during key lookup → `503` (fail closed). It is handled in the hook, not thrown, so it never
   reaches the 502 "portal" error handler.
 - `src/config/load.ts` loads `.env` and `obrigatoria()`; `env.ts` builds the server config. The key CLI
-  imports only `load.ts`, so it works without portal credentials; `DATABASE_URL` is required by the server only.
+  imports only `load.ts`; `DATABASE_URL` and `CREDENCIAIS_CHAVE` are required by the server only.
 - Never log API keys. Fastify's default request log does not include headers; keep it that way.
 
 Error log and download history (stage 8):
@@ -135,17 +143,29 @@ Error log and download history (stage 8):
 - Inserts are fire-and-forget (`.catch` → `[auditoria]` console warning). Never `await` them in a route.
 - Retention (`agendarRetencao`) runs in the API at startup and every 24 h; the timer is `unref`'d.
 
-Keep-alive (stage 9):
+Per-user portal sessions (stage 17, replaces the stage 9 keep-alive):
 
-- `KeepAlive.tick()` runs every `KEEPALIVE_INTERVALO_MINUTOS` and only acts if `SessaoBroker.ociosaHaMs()` is at
-  least the interval (requests and logins count as activity). It calls `sessao.verificar()`, which goes
-  through `executar` (queue + one retry with a fresh login), so it never runs in parallel with a request.
-- `verificarSessao` loads `/broker/menu.php` and waits for the "Protocolo" link. **Never use a search as a
-  keep-alive**: without filters it lists other people's protocols.
-- A failure after the retry calls `aoFalhar` → `logs_erro` with `metodo`/`status_http` NULL and
-  `detalhes.origem = 'keepalive'`.
-- The portal's real session timeout is still unknown. If the keep-alive ever needs a re-login, the
-  `[sessao] Falha na operação` line shows it; that hints the interval is longer than the timeout.
+- The portal is used with the credentials of the **API key's owner** (`req.chaveApi.usuarioId` → every
+  `ServicoProtocolos` method takes `usuarioId` first). There are no portal credentials in `.env`.
+- `src/credentials/crypto.ts` is a copy of `dashboard/server/utils/credentials-crypto.ts` (AES-256-GCM,
+  `CREDENCIAIS_CHAVE`, user id as AAD). Keep both in sync; both test suites decrypt the same fixed vector.
+- `GerenciadorSessoes` (`scraper/sessions.ts`) reads `credenciais_portal` on **every** request (1 query):
+  missing → `ErroCredenciais('credenciais_nao_cadastradas')`; status `invalida` → `ErroCredenciais('credenciais_invalidas')`
+  without touching the portal; a new version (`atualizada_em::text`) closes the old session.
+  Status writes are conditional on that version, so a login result never overwrites credentials saved meanwhile.
+- `ErroCredenciais` → `409 {erro, codigo}` in the error handler, **not** written to `logs_erro` nor to the
+  query/download history (the portal was not queried).
+- `login()` throws `ErroLoginRecusado` when the SSO (`POST /api/auth`) answers 4xx (not 429), or when the Broker
+  button never shows while a password field is still visible (expired password, guessed: the real screen is
+  unknown). Recon: wrong login = `400` + "Credenciais inválidas. Certifique-se de que está informando os dados corretos."
+  `SessaoBroker` never retries it and never logs in again with those credentials; the manager marks them `invalida`.
+  A successful login calls `aoLogar` → `valida` + `ultimo_login_ok_em`.
+- One shared Chromium (`scraper/browser.ts`), one context + queue per user. Idle sessions (`SESSAO_OCIOSA_MINUTOS`)
+  are closed by a 1-minute `unref`'d timer; at `SESSOES_MAX` the most idle **free** session is closed (if all are
+  busy the limit is briefly exceeded). Map lookup → create → set has no `await` in between, so concurrent requests
+  of one user share one session.
+- `/health` is public: it shows only counts (`sessoesAbertas`, `maximo`), never which users are logged in.
+  Console logs label sessions with a counter (`[sessao #3]`), never the e-mail.
 
 Design rules:
 
@@ -153,7 +173,7 @@ Design rules:
 - `criarApp(servico)` receives the service by injection, so HTTP tests use a fake `ServicoProtocolos`.
 - **Business outcomes are return values, technical failures are exceptions.** `obterPdf` returns
   `{tipo:'nao_encontrado' | 'sem_pdf' | 'ok'}`; only real failures throw. This matters because
-  `SessaoBroker` retries on *any* exception, so never throw for "not found".
+  `SessaoBroker` retries on *any* exception (except `ErroLoginRecusado`), so never throw for "not found".
 - Validate input **before** touching the browser (invalid CPF → 400 in ~1 ms).
 - Never expose `pdfUrl`/`idInterno` (internal portal URLs) in API responses.
 
@@ -243,11 +263,11 @@ The body is validated with the `%PDF` magic bytes (an HTML body usually means th
 | Scratch scripts outside the package are CommonJS | Put them in `.dev/` (inside the package, git-ignored). |
 | `wait` in shell tests hangs when the server runs in the background | Wait for specific PIDs, then kill the server explicitly. |
 | A test API with a fake `PORTAL_URL` opened visible Chromium windows on the user's Mac (their `api/.env` has `HEADLESS=false`) | Always start test servers with `HEADLESS=true` explicitly, besides the fake `PORTAL_URL`. |
-| `kill %1` on a background `npm start` left the `tsx` child running (a test API kept writing keep-alive errors for 15 min) | Stop it with `pkill -f "tsx src/server.ts"` and check with `ps` that nothing is left. |
+| `kill %1` on a background `npm start` left the `tsx` child running (a test API kept writing errors for 15 min) | Stop it with `pkill -f "tsx src/server.ts"` and check with `ps` that nothing is left. |
 
 ## 7. Debugging a portal change
 
-1. `HEADLESS=false npm run cli -- <cpf>` and watch the browser.
+1. `HEADLESS=false npm run cli -- --email <e-mail> <cpf>` and watch the browser.
 2. On failure, the CLI saves full-page screenshots of every tab to `downloads/erros/`, and listings to
    `downloads/debug/protocolos_<key>.json`. `htmlDosResultados()` returns the table HTML for inspection.
 3. Exploration scripts live in `.dev/` (git-ignored). Run them with `npx tsx .dev/<file>.ts`.
@@ -270,7 +290,7 @@ The body is validated with the `%PDF` magic bytes (an HTML body usually means th
 
 - CPF and names are personal data (LGPD). `downloads/` (PDFs, debug JSON/HTML, screenshots) is
   git-ignored, so keep it that way and avoid logging personal data beyond what is necessary.
-- `.env` holds portal credentials. It is git-ignored and should be `chmod 600` on servers.
+- `.env` holds `CREDENCIAIS_CHAVE` (decrypts every user's portal password). It is git-ignored and should be `chmod 600` on servers.
 - Every route except `/health` requires an API key. Keys travel in headers, so the API must only be
   exposed through HTTPS. The default bind is `127.0.0.1`. Do not change the default (Docker sets
   `HOST=0.0.0.0` inside the internal network; only Caddy is published).
@@ -286,7 +306,7 @@ The body is validated with the `%PDF` magic bytes (an HTML body usually means th
   (e.g. "PDF da Proposta", "resultados encontrados").
 - Small single-purpose functions, each with a short comment explaining **why** (portal quirks).
 - Selectors: prefer role/text/attribute-prefix selectors. Never use codegen's dynamic ids.
-- Log with the `[portal]` / `[sessao]` / `[keepalive]` / `[auth]` / `[auditoria]` / `[retencao]` prefixes (console). Fastify's logger is used for HTTP.
+- Log with the `[portal]` / `[sessao]` / `[sessoes]` / `[auth]` / `[auditoria]` / `[retencao]` prefixes (console). Fastify's logger is used for HTTP.
 - Keep filter logic pure (`aplicarFiltros`) and unit-tested.
 - Dates in API responses keep the portal format. Filter inputs accept `YYYY-MM-DD` or `DD/MM/YYYY`.
 
@@ -303,4 +323,7 @@ Known gaps:
 - `statusSinistro` parsing has not been validated with a protocol that has a claim (sinistro).
 - `txtNomeSegurado` (name search) format unknown.
 - CNPJ is accepted by the scraper (`formatarDocumento`) but the API only accepts CPF and does not validate CNPJ check digits.
-- The portal's session timeout is unknown (the keep-alive interval of 10 min is a guess).
+- The portal's session timeout is unknown. Sessions are closed after `SESSAO_OCIOSA_MINUTOS` idle anyway; if the portal
+  expires them sooner, the first request after that pays one re-login (`[sessao #n] Falha na operação`).
+- What the portal shows for an **expired** password is unknown: treated as refused only when a password field is still
+  on screen after a 2xx login. Adjust `login()` when it is seen.

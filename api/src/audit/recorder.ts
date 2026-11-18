@@ -15,6 +15,8 @@ export interface RegistroErro {
   mensagem: string;
   detalhes?: Record<string, unknown>;
   apiKeyId?: string | null;
+  /** Key owner (null for background jobs and unauthenticated requests). */
+  usuarioId?: string | null;
   requestId?: string;
 }
 
@@ -29,6 +31,7 @@ export interface RegistroDownload {
   tamanhoBytes?: number | null;
   duracaoMs: number;
   apiKeyId?: string | null;
+  usuarioId?: string | null;
 }
 
 export interface RegistroConsulta {
@@ -41,6 +44,7 @@ export interface RegistroConsulta {
   protocolos: string[];
   duracaoMs: number;
   apiKeyId?: string | null;
+  usuarioId?: string | null;
 }
 
 export interface Auditoria {
@@ -71,9 +75,10 @@ export class AuditoriaPg implements Auditoria {
     this.gravar(
       'erro',
       this.sql`
-        INSERT INTO logs_erro (origem, metodo, rota, status_http, mensagem, detalhes, api_key_id, request_id)
+        INSERT INTO logs_erro (origem, metodo, rota, status_http, mensagem, detalhes, api_key_id, usuario_id, request_id)
         VALUES ('api', ${r.metodo}, ${r.rota}, ${r.statusHttp}, ${textoSeguro(r.mensagem)},
-                ${detalhes ? this.sql.json(detalhes) : null}, ${r.apiKeyId ?? null}, ${r.requestId ?? null})
+                ${detalhes ? this.sql.json(detalhes) : null}, ${r.apiKeyId ?? null}, ${r.usuarioId ?? null},
+                ${r.requestId ?? null})
       `,
     );
   }
@@ -82,9 +87,9 @@ export class AuditoriaPg implements Auditoria {
     this.gravar(
       'download',
       this.sql`
-        INSERT INTO downloads_pdf (protocolo, tipo, destino, resultado, tamanho_bytes, duracao_ms, api_key_id)
+        INSERT INTO downloads_pdf (protocolo, tipo, destino, resultado, tamanho_bytes, duracao_ms, api_key_id, usuario_id)
         VALUES (${r.protocolo}, ${r.tipo}, ${r.destino ?? null}, ${r.resultado}, ${r.tamanhoBytes ?? null},
-                ${Math.round(r.duracaoMs)}, ${r.apiKeyId ?? null})
+                ${Math.round(r.duracaoMs)}, ${r.apiKeyId ?? null}, ${r.usuarioId ?? null})
       `,
     );
   }
@@ -96,11 +101,11 @@ export class AuditoriaPg implements Auditoria {
       'consulta',
       this.sql`
         INSERT INTO consultas_protocolos
-          (cpf_mascarado, cpf_hash, filtros, resultado, quantidade, protocolos, duracao_ms, api_key_id)
+          (cpf_mascarado, cpf_hash, filtros, resultado, quantidade, protocolos, duracao_ms, api_key_id, usuario_id)
         VALUES (${mascararCpf(digitos)}, ${hashCpf(digitos, this.chaveHmacCpf)},
                 ${filtros ? this.sql.json(filtros) : null}, ${r.resultado},
                 ${r.resultado === 'ok' ? r.protocolos.length : null}, ${r.protocolos},
-                ${Math.round(r.duracaoMs)}, ${r.apiKeyId ?? null})
+                ${Math.round(r.duracaoMs)}, ${r.apiKeyId ?? null}, ${r.usuarioId ?? null})
       `,
     );
   }

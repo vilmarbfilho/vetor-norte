@@ -1,6 +1,6 @@
 // Turns a protocol's PDF into a channel-agnostic Documento and delivers it to a destination.
 // The delivery runs OUTSIDE the browser session queue: a slow or failing receiver must not
-// hold the portal tab nor trigger SessaoBroker's re-login/retry.
+// hold the user's portal tab nor trigger SessaoBroker's re-login/retry.
 
 import type { RegistroDestinos } from '../delivery/registry.ts';
 import type { Documento, PedidoEnvio, ResultadoEntrega } from '../delivery/types.ts';
@@ -25,6 +25,7 @@ export type ResultadoEnvio =
  */
 export async function enviarPdf(
   servico: ServicoProtocolos,
+  usuarioId: string,
   destinos: RegistroDestinos,
   numeroProtocolo: string,
   nomeDestino: string,
@@ -34,7 +35,7 @@ export async function enviarPdf(
   const destino = destinos.get(nomeDestino);
   if (!destino) return { tipo: 'destino_desconhecido' };
 
-  const resultado = await servico.obterPdf(numeroProtocolo);
+  const resultado = await servico.obterPdf(usuarioId, numeroProtocolo);
   if (resultado.tipo !== 'ok') return resultado;
 
   const documento = documentoDoPdf(resultado.protocolo.protocolo, resultado.pdf);

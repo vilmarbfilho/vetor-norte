@@ -4,11 +4,13 @@ Automation and monitoring for the **Broker One** portal (Rede Lojacorr), which h
 
 The project is a monorepo with two applications that share one PostgreSQL database:
 
-- **API** (`api/`): an HTTP API that logs in to the portal with a real browser (Playwright), keeps the
-  session open, and lets integrations (n8n, WhatsApp gateways, internal tools) **list insurance protocols
-  by CPF**, **download the "PDF da Proposta"** and **push that PDF to configured webhooks**.
-- **Dashboard** (`dashboard/`): a web app with login where the team monitors the API (error logs, protocol
-  query history, PDF download history) and manages the **API keys** used to call it.
+- **API** (`api/`): an HTTP API that logs in to the portal with a real browser (Playwright), **as the owner of
+  the API key** (each user's own portal account), keeps that session open, and lets integrations (n8n, WhatsApp
+  gateways, internal tools) **list insurance protocols by CPF**, **download the "PDF da Proposta"** and **push
+  that PDF to configured webhooks**.
+- **Dashboard** (`dashboard/`): a web app with login and two profiles, **admin** and **corretor** (broker).
+  Users save their **portal credentials** (encrypted), manage their **API keys** and see their history
+  (protocol queries, PDF downloads). Admins see everything, manage users and permissions, and see the error log.
 
 > ⚠️ The solution handles personal data (CPF, names) protected by Brazil's **LGPD**. CPFs are masked in
 > logs and in the database, history is purged automatically, and everything is served only over HTTPS in
@@ -55,8 +57,9 @@ The project is a monorepo with two applications that share one PostgreSQL databa
      │ Playwright ──┼──► Broker One │              │
      │ (Chromium)   │     portal    │              │
      └──────┬───────┘               └──────┬───────┘
-            │  API keys (read), logs,      │  users, sessions, API keys (write),
-            │  history (write)             │  logs and history (read)
+            │  API keys + portal           │  users, sessions, API keys and portal
+            │  credentials (read), logs,   │  credentials (write), logs and
+            │  history (write)             │  history (read)
             └──────────────┬───────────────┘
                            ▼
                   ┌─────────────────┐     ┌──────────────┐   ┌────────────────────┐
@@ -112,9 +115,10 @@ Each package is an **independent npm project**: run `npm` commands inside `api/`
 - **PDF download** of a protocol's "PDF da Proposta", as binary or as base64 JSON.
 - **PDF delivery** to named webhook destinations configured on the server (`DESTINO_<NOME>_URL`), e.g. an
   n8n flow that forwards it to WhatsApp. Callers can only choose a name, never a URL.
-- **Persistent portal session**: one login at startup (~8 s), requests queued over one browser tab,
-  automatic retry with a fresh login.
-- **Session keep-alive**: light navigation after an idle interval so the portal session does not expire.
+- **One portal session per user**: each request uses the portal credentials of the API key's owner (saved,
+  encrypted, in the dashboard). One Chromium, one logged-in context per user with its own queue, automatic retry
+  with a fresh login, closed after `SESSAO_OCIOSA_MINUTOS` idle, at most `SESSOES_MAX` open. A refused login marks
+  the credentials invalid and is not retried (`409 credenciais_invalidas`) until the user updates them.
 - **API keys** with per-key permissions (`protocolos:listar`, `pdf:baixar`, `pdf:enviar`) and an optional
   per-key **rate limit** (global toggle).
 - **Audit**: error log (5xx), PDF download history and protocol query history written to PostgreSQL
@@ -123,19 +127,26 @@ Each package is an **independent npm project**: run `npm` commands inside `api/`
 
 ### Dashboard (`dashboard/`)
 
-- **Login** with users created from the command line (no sign-up page), all users are administrators.
-- **Error logs** (API and dashboard), with filters and full details (masked).
-- **Protocol queries**: every `GET /protocolos` call, searchable by **full CPF** (only its HMAC is used).
-- **PDF downloads**: which protocol, when, result, size, and which API key (and who created it).
-- **API keys**: create (secret shown once), edit name/permissions/limit, revoke.
+- **Login** (no sign-up page). Users are created by an admin in the dashboard (temporary password, changed at the
+  first login) or from the command line.
+- **Profiles**: **admin** sees everything (with a "Corretor" column/filter), manages users and is the only one
+  who sees the error log. **Corretor** sees only their own data and only the screens an admin granted
+  (protocol queries, PDF downloads, API keys).
+- **API permissions ceiling** per corretor: their keys can never exceed it (checked on every request).
+- **Portal credentials**: each user saves their Broker portal e-mail/password (AES-256-GCM, password never shown
+  again); status *not tested / valid / invalid* visible to the user and to admins, with a warning banner.
+- **Error logs** (admin), **protocol queries** (searchable by **full CPF**, only its HMAC is used),
+  **PDF downloads**, **API keys** (create, secret shown once; edit; revoke).
 - **My account**: interface language (English or Portuguese, per user, default English) and password change.
 
 ## Requirements
 
 - **Node.js 22+**
 - **Docker** with the compose plugin (on macOS: Colima or Docker Desktop)
-- A **Broker One portal account** (e-mail + password) with access to the "Protocolo" screen
-- ~500 MB of free RAM for the headless Chromium
+- A **Broker One portal account** (e-mail + password) with access to the "Protocolo" screen **per user** who
+  calls the API (admins only need one if they call it)
+- ~500 MB of free RAM for the headless Chromium, plus roughly 150–250 MB per open portal session
+  (at most `SESSOES_MAX`, default 5)
 
 ## Local development
 
@@ -143,7 +154,7 @@ On the dev machine only PostgreSQL and the migrations run in Docker; API and das
 
 ```bash
 # 1. Database
-cp .env.example .env                 # set a URL-safe POSTGRES_PASSWORD and CPF_HMAC_CHAVE; chmod 600 .env
+cp .env.example .env                 # set a URL-safe POSTGRES_PASSWORD, CPF_HMAC_CHAVE, CREDENCIAIS_CHAVE; chmod 600 .env
 docker compose up -d postgres
 docker compose run --rm migrations   # applies pending migrations (idempotent)
 
@@ -151,16 +162,17 @@ docker compose run --rm migrations   # applies pending migrations (idempotent)
 cd api
 npm ci
 npx playwright install chromium
-cp .env.example .env                 # portal credentials, DATABASE_URL, CPF_HMAC_CHAVE
-npm run chaves -- criar --nome "dev" --permissoes protocolos:listar,pdf:baixar
+cp .env.example .env                 # DATABASE_URL, CPF_HMAC_CHAVE, CREDENCIAIS_CHAVE (portal logins are per user)
 npm run dev                          # http://127.0.0.1:3000
 
 # 3. Dashboard (another terminal)
 cd dashboard
 npm ci
-cp .env.example .env                 # DATABASE_URL, same CPF_HMAC_CHAVE as the API
-npm run usuarios -- criar --nome "Name" --email someone@example.com   # password asked at a hidden prompt
-npm run build && npm start           # http://localhost:3100
+cp .env.example .env                 # DATABASE_URL, same CPF_HMAC_CHAVE and CREDENCIAIS_CHAVE as the API
+npm run usuarios -- criar --nome "Name" --email someone@example.com --perfil admin   # password asked at a hidden prompt
+npm run build && npm start           # http://localhost:3100 → log in, save your portal credentials
+# API keys: create them in the dashboard, or with the API CLI (every key belongs to a user):
+#   cd api && npm run chaves -- criar --usuario someone@example.com --nome "dev" --permissoes protocolos:listar,pdf:baixar
 # or, with hot reload: `npm run dev` (backend :3100) + `npm run dev:web` (Vite :5173, proxies /api)
 ```
 
@@ -169,7 +181,8 @@ Tips:
 - Use `http://localhost` (not `127.0.0.1`) for the dashboard: browsers accept the `Secure` cookie there.
   Safari does not; set `COOKIE_SECURE=false` locally in that case.
 - `HEADLESS=false` in `api/.env` opens a visible browser window, useful to watch the portal automation.
-- Generate secrets with `openssl rand -hex 32` (CPF HMAC key) and `openssl rand -hex 24` (DB password).
+- Generate secrets with `openssl rand -hex 32` (CPF HMAC key), `openssl rand -base64 32` (credentials key) and
+  `openssl rand -hex 24` (DB password). The two keys must be identical in `api/.env` and `dashboard/.env`.
 
 Quick check:
 
@@ -192,6 +205,7 @@ Each has a documented `.env.example` next to it.
 | `COMPOSE_PROFILES` | — | `producao` on the VPS (starts api, dashboard, caddy, backup); unset on dev |
 | `DOMINIO` | `vn.vlabs.com.br` | Public domain used by Caddy |
 | `CPF_HMAC_CHAVE` | — | Secret (≥ 32 chars) for CPF hashes; passed to API and dashboard. **Never change after go-live** |
+| `CREDENCIAIS_CHAVE` | — | 32 bytes, base64 (`openssl rand -base64 32`); encrypts portal passwords; passed to API and dashboard. Changing it = users must save their portal passwords again |
 | `BACKUP_HABILITADO` | `false` | Daily database backup |
 | `BACKUP_HORA` / `BACKUP_MANTER` / `TZ` | `03:00` / `7` / `America/Sao_Paulo` | Backup time, files kept, timezone |
 
@@ -199,14 +213,15 @@ Each has a documented `.env.example` next to it.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PORTAL_URL`, `PORTAL_EMAIL`, `PORTAL_SENHA` | — | Portal login (required) |
+| `PORTAL_URL` | — | Portal login URL (required). E-mail/password are per user, saved in the dashboard |
+| `CREDENCIAIS_CHAVE` | — | Same value as in the dashboard (required); decrypts portal passwords |
 | `DATABASE_URL` | — | PostgreSQL URL (required) |
 | `CPF_HMAC_CHAVE` | — | Same value as in the dashboard (required) |
 | `HEADLESS` | `true` | `false` = visible browser |
 | `HOST` / `PORT` | `127.0.0.1` / `3000` | Bind address and port |
 | `PREFIXO_PUBLICO` | — | Path prefix added by the proxy (`/broker` in Docker), used in returned links |
 | `RATE_LIMIT_HABILITADO` / `RATE_LIMIT_POR_MINUTO` | `true` / `60` | Per-key rate limit |
-| `KEEPALIVE_HABILITADO` / `KEEPALIVE_INTERVALO_MINUTOS` | `true` / `10` | Portal session keep-alive |
+| `SESSAO_OCIOSA_MINUTOS` / `SESSOES_MAX` | `15` / `5` | Per-user portal sessions: idle close, max open |
 | `RETENCAO_LOGS_DIAS` / `RETENCAO_DOWNLOADS_DIAS` / `RETENCAO_CONSULTAS_DIAS` | `90` / `365` / `90` | Retention (days) |
 | `DESTINO_<NOME>_URL` / `_TOKEN` / `_TIMEOUT_MS` | — | PDF delivery webhook destinations |
 
@@ -216,13 +231,14 @@ Each has a documented `.env.example` next to it.
 |---|---|---|
 | `DATABASE_URL` | — | Same database as the API (required) |
 | `CPF_HMAC_CHAVE` | — | Same value as in the API (required) |
+| `CREDENCIAIS_CHAVE` | — | Same value as in the API (required); encrypts portal passwords |
 | `HOST` / `PORT` | `127.0.0.1` / `3100` | Bind address and port |
 | `COOKIE_SECURE` | `true` | Session cookie only over HTTPS |
 | `SESSAO_INATIVIDADE_HORAS` / `SESSAO_DURACAO_MAXIMA_DIAS` | `8` / `7` | Session idle timeout and maximum lifetime |
 | `LOGIN_MAX_TENTATIVAS` / `LOGIN_BLOQUEIO_MINUTOS` | `5` / `15` | Login brute-force protection |
 
-In Docker, `DATABASE_URL`, `HOST`, `PORT`, `HEADLESS`, `PREFIXO_PUBLICO`, `COOKIE_SECURE` and
-`CPF_HMAC_CHAVE` are set by `docker-compose.yml`, overriding the package `.env` files.
+In Docker, `DATABASE_URL`, `HOST`, `PORT`, `HEADLESS`, `PREFIXO_PUBLICO`, `COOKIE_SECURE`,
+`CPF_HMAC_CHAVE` and `CREDENCIAIS_CHAVE` are set by `docker-compose.yml`, overriding the package `.env` files.
 
 ## Database
 
@@ -259,25 +275,29 @@ except `/health` needs an API key in `Authorization: Bearer vn_...` or `X-API-Ke
 
 | Method & path | Permission | Description |
 |---|---|---|
-| `GET /health` | public | Portal session status |
+| `GET /health` | public | Number of open portal sessions |
 | `GET /protocolos?cpf=...` | `protocolos:listar` | Lists a CPF's protocols, with optional filters |
 | `GET /protocolos/{protocolo}/pdf` | `pdf:baixar` | Downloads the PDF (`?formato=base64` for JSON) |
 | `GET /destinos` | `pdf:enviar` | Lists configured delivery destinations (names only) |
 | `POST /protocolos/{protocolo}/pdf/envios` | `pdf:enviar` | Sends the PDF to a destination (`{destino, destinatario?, mensagem?, referencia?}`) |
 
-Typical timings against the real portal: listing ~1–2.5 s, PDF ~3 s. Requests are processed one at a time
-(single browser tab), roughly 20–60 operations per minute. Full reference with filters, payloads and error
+Every request runs in the portal as the **key's owner**. Their first request (or one after
+`SESSAO_OCIOSA_MINUTOS` idle) logs in, ~8 s. Missing or refused portal credentials → `409`
+(`credenciais_nao_cadastradas` / `credenciais_invalidas`). Typical timings: listing ~1–2.5 s, PDF ~3 s.
+Each user's requests are processed one at a time (one tab per user), roughly 20–60 operations per minute per user. Full reference with filters, payloads and error
 codes: [`api/README.md`](api/README.md).
 
 ## Dashboard overview
 
-Pages: **Error logs**, **Protocol queries**, **PDF downloads**, **API keys**, **My account**.
+Pages: **Error logs** (admin), **Protocol queries**, **PDF downloads**, **API keys**, **Users** (admin),
+**Portal credentials**, **My account**. A corretor sees only the pages an admin granted, plus the last two.
 
-User management (CLI only; passwords at a hidden prompt, min. 10 characters):
+User management from the CLI (passwords at a hidden prompt, min. 10 characters). Admins can also manage users
+in the dashboard (`/api/usuarios`; temporary password shown once, changed at the first login):
 
 ```bash
 cd dashboard
-npm run usuarios -- criar --nome "Name" --email someone@example.com
+npm run usuarios -- criar --nome "Name" --email someone@example.com --perfil admin
 npm run usuarios -- listar
 npm run usuarios -- redefinir-senha someone@example.com   # also ends that user's sessions
 npm run usuarios -- desativar someone@example.com
@@ -300,8 +320,10 @@ Full guide: [`deploy/README.md`](deploy/README.md). In short:
 docker compose up -d --build
 docker compose ps                     # api/dashboard "healthy"
 docker compose logs -f caddy          # certificate issuance
-docker compose exec dashboard npm run usuarios -- criar --nome "Name" --email someone@example.com
+docker compose exec dashboard npm run usuarios -- criar --nome "Name" --email someone@example.com --perfil admin
 ```
+
+5. Log in, save your portal credentials ("Portal credentials"), create the corretores ("Users") and API keys.
 
 Updating: `git pull && docker compose up -d --build` (rebuilds images and applies new migrations). When the
 `playwright` version in `api/package-lock.json` changes, update the `FROM` tag in `api/Dockerfile`.
@@ -310,11 +332,17 @@ Backup: with `BACKUP_HABILITADO=true`, `pg_dump` runs daily into `./backups` (ke
 Backups stay **only on the VPS** (no off-site copy). Manual backup: `docker compose exec backup sh /backup.sh agora`.
 Restore instructions are in `deploy/README.md`.
 
-Run a **single API instance** per portal account (one portal session).
+Run a **single API instance**: it keeps one portal session per user, and two instances would log the same
+portal account in twice.
 
 ## Security and LGPD
 
-- **Secrets** only in `.env` files (git-ignored, `chmod 600`). Credentials are never printed or stored.
+- **Secrets** only in `.env` files (git-ignored, `chmod 600`). Credentials are never printed or logged.
+- **Portal passwords**: stored only encrypted (AES-256-GCM, `CREDENCIAIS_CHAVE`, user id as authenticated data),
+  never returned by the dashboard nor written to logs. Keep a copy of `CREDENCIAIS_CHAVE` outside the server.
+  A refused login is never retried automatically (avoids locking the portal account).
+- **Access control**: corretores only see their own data, enforced on the server for every route; API key
+  permissions are capped by the owner's ceiling, and a deactivated user's keys stop working.
 - **API keys**: `vn_` + 32 random bytes; only the SHA-256 hash is stored; the full key is shown once.
   Revocation reaches the API within ~10 s (key cache).
 - **Dashboard sessions**: scrypt passwords, 256-bit token in an `httpOnly; Secure; SameSite=Strict` cookie

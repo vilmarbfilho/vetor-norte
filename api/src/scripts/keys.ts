@@ -1,7 +1,8 @@
-// API key management CLI. Temporary tool until the dashboard manages keys (later stage).
+// API key management CLI (the dashboard does the same; kept for scripts and emergencies).
 //
 // Usage:
-//   npm run chaves -- criar --nome "<name>" --permissoes protocolos:listar,pdf:baixar,pdf:enviar [--limite 30]
+//   npm run chaves -- criar --usuario <e-mail> --nome "<name>" --permissoes protocolos:listar,pdf:baixar [--limite 30]
+//     The key belongs to that dashboard user; for a corretor, permissions must be within their ceiling.
 //   npm run chaves -- listar
 //   npm run chaves -- revogar <prefixo>
 
@@ -12,14 +13,14 @@ import { obrigatoria } from '../config/load.ts';
 import { conectarBanco } from '../db/client.ts';
 
 const USO = `Uso:
-  npm run chaves -- criar --nome "<nome>" --permissoes <lista> [--limite <req/min>]
+  npm run chaves -- criar --usuario <e-mail> --nome "<nome>" --permissoes <lista> [--limite <req/min>]
   npm run chaves -- listar
   npm run chaves -- revogar <prefixo>
 Permissões: ${PERMISSOES.join(', ')}`;
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
-  options: { nome: { type: 'string' }, permissoes: { type: 'string' }, limite: { type: 'string' } },
+  options: { usuario: { type: 'string' }, nome: { type: 'string' }, permissoes: { type: 'string' }, limite: { type: 'string' } },
 });
 const [comando, argumento] = positionals;
 
@@ -40,13 +41,21 @@ try {
       if (invalidas.length) falhar(`Permissões inválidas: ${invalidas.join(', ')}`);
       const limite = values.limite === undefined ? null : Number(values.limite);
       if (limite !== null && (!Number.isInteger(limite) || limite <= 0)) falhar('--limite deve ser um inteiro positivo.');
+      if (!values.usuario) falhar('Informe --usuario (e-mail do dono da chave no dashboard).');
+      const [dono] = await sql<{ id: string; nome: string; perfil: string; ativo: boolean; permissoes_api: string[] }[]>`
+        SELECT id, nome, perfil, ativo, permissoes_api FROM usuarios WHERE lower(email) = lower(${values.usuario.trim()})
+      `;
+      if (!dono) falhar(`Usuário ${values.usuario} não encontrado.`);
+      if (!dono.ativo) falhar(`Usuário ${values.usuario} está desativado.`);
+      const fora = dono.perfil === 'admin' ? [] : permissoes.filter((p) => !dono.permissoes_api.includes(p));
+      if (fora.length) falhar(`Permissões fora do limite liberado para ${values.usuario}: ${fora.join(', ')}`);
 
       const { chave, prefixo, hash } = gerarChave();
       await sql`
-        INSERT INTO api_keys (nome, prefixo, hash, permissoes, limite_por_minuto)
-        VALUES (${nome}, ${prefixo}, ${hash}, ${permissoes}, ${limite})
+        INSERT INTO api_keys (nome, prefixo, hash, permissoes, limite_por_minuto, usuario_id)
+        VALUES (${nome}, ${prefixo}, ${hash}, ${permissoes}, ${limite}, ${dono.id})
       `;
-      console.log(`Chave criada: "${nome}" (${prefixo}…)`);
+      console.log(`Chave criada: "${nome}" (${prefixo}…) para ${dono.nome}`);
       console.log(`Permissões: ${permissoes.join(', ')}${limite ? ` | limite: ${limite} req/min` : ''}`);
       console.log('\nGuarde a chave abaixo agora. Ela NÃO será exibida novamente:\n');
       console.log(chave);
@@ -54,11 +63,13 @@ try {
     }
     case 'listar': {
       const linhas = await sql<
-        { prefixo: string; nome: string; permissoes: string[]; limite_por_minuto: number | null;
+        { prefixo: string; nome: string; dono: string; permissoes: string[]; limite_por_minuto: number | null;
           criada_em: Date; ultimo_uso_em: Date | null; revogada_em: Date | null }[]
       >`
-        SELECT prefixo, nome, permissoes, limite_por_minuto, criada_em, ultimo_uso_em, revogada_em
-        FROM api_keys ORDER BY criada_em
+        SELECT k.prefixo, k.nome, u.email AS dono, k.permissoes, k.limite_por_minuto, k.criada_em, k.ultimo_uso_em,
+               k.revogada_em
+        FROM api_keys k JOIN usuarios u ON u.id = k.usuario_id
+        ORDER BY k.criada_em
       `;
       if (linhas.length === 0) console.log('Nenhuma chave cadastrada.');
       const data = (d: Date | null) => (d ? d.toLocaleString('pt-BR') : '-');
@@ -66,6 +77,7 @@ try {
         linhas.map((l) => ({
           prefixo: l.prefixo,
           nome: l.nome,
+          dono: l.dono,
           permissoes: l.permissoes.join(','),
           limite: l.limite_por_minuto ?? 'padrão',
           criada: data(l.criada_em),

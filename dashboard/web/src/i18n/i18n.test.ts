@@ -17,7 +17,9 @@ test('pt e en têm as mesmas chaves e os mesmos marcadores', () => {
 
 test('todo código de erro do backend tem tradução', () => {
   const codigos = ['credenciais_invalidas', 'login_bloqueado', 'nao_autenticado', 'parametros_invalidos', 'chave_revogada',
-    'nao_encontrado', 'senha_atual_incorreta', 'senha_curta', 'senha_igual', 'csrf', 'erro_interno'];
+    'nao_encontrado', 'senha_atual_incorreta', 'senha_curta', 'senha_igual', 'csrf', 'erro_interno', 'acesso_negado',
+    'troca_senha_obrigatoria', 'apenas_admin', 'permissao_fora_do_limite', 'usuario_inativo', 'email_em_uso',
+    'proprio_usuario'];
   for (const c of codigos) assert.ok(`erro.${c}` in en, c);
 });
 

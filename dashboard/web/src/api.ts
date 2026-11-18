@@ -1,10 +1,30 @@
 // Small fetch wrapper for the dashboard API: same-origin cookie, CSRF header, JSON, typed errors.
 import type {
-  ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Usuario,
+  ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, ResumoCredencial, StatusCredencial,
+  Usuario, UsuarioResumo,
 } from '../../server/repositories/types.ts';
 import type { Permissao } from '../../server/auth/api-keys.ts';
+import type { Perfil, Tela } from '../../server/auth/access.ts';
 
-export type { ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Permissao, Usuario };
+export type {
+  ChaveApiResumo, Consulta, Download, Idioma, LogErro, LogErroDetalhado, Pagina, Perfil, Permissao, ResumoCredencial,
+  StatusCredencial, Tela, Usuario, UsuarioResumo,
+};
+
+/** Broker portal login typed by the user (the password is only ever sent, never received). */
+export interface DadosCredencial {
+  emailPortal: string;
+  senha: string;
+}
+
+/** Fields an admin sets when creating or editing a user. */
+export interface DadosUsuario {
+  nome: string;
+  email: string;
+  perfil: Perfil;
+  telas: Tela[];
+  permissoesApi: Permissao[];
+}
 
 /** API error: `codigo` is translated by the UI (erro.<codigo>). */
 export class ErroApi extends Error {
@@ -51,10 +71,26 @@ export const api = {
   log: (id: string) => chamar<LogErroDetalhado>('GET', `/logs/${encodeURIComponent(id)}`),
   consultas: (q: URLSearchParams) => chamar<Pagina<Consulta>>('GET', `/consultas?${q}`),
   downloads: (q: URLSearchParams) => chamar<Pagina<Download>>('GET', `/downloads?${q}`),
-  chaves: () => chamar<{ chaves: ChaveApiResumo[]; permissoesDisponiveis: Permissao[] }>('GET', '/chaves'),
-  criarChave: (c: { nome: string; permissoes: Permissao[]; limitePorMinuto: number | null }) =>
+  /** Admins may filter by owner; corretores always get their own keys. */
+  chaves: (usuarioId?: string) =>
+    chamar<{ chaves: ChaveApiResumo[]; permissoesDisponiveis: Permissao[] }>('GET', `/chaves${usuarioId ? `?usuarioId=${encodeURIComponent(usuarioId)}` : ''}`),
+  /** `limitePorMinuto` and `usuarioId` are admin-only (omit them for corretores). */
+  criarChave: (c: { nome: string; permissoes: Permissao[]; limitePorMinuto?: number | null; usuarioId?: string }) =>
     chamar<{ chave: ChaveApiResumo; segredo: string }>('POST', '/chaves', c),
   alterarChave: (id: string, c: { nome?: string; permissoes?: Permissao[]; limitePorMinuto?: number | null }) =>
     chamar<{ chave: ChaveApiResumo }>('PATCH', `/chaves/${id}`, c),
   revogarChave: (id: string) => chamar<{ chave: ChaveApiResumo }>('POST', `/chaves/${id}/revogar`),
+  usuarios: () =>
+    chamar<{ usuarios: UsuarioResumo[]; telasDisponiveis: Tela[]; permissoesDisponiveis: Permissao[] }>('GET', '/usuarios'),
+  criarUsuario: (u: DadosUsuario) => chamar<{ usuario: UsuarioResumo; senhaTemporaria: string }>('POST', '/usuarios', u),
+  alterarUsuario: (id: string, u: Partial<DadosUsuario>) => chamar<{ usuario: UsuarioResumo }>('PATCH', `/usuarios/${id}`, u),
+  definirAtivo: (id: string, ativo: boolean) =>
+    chamar<{ usuario: UsuarioResumo }>('POST', `/usuarios/${id}/${ativo ? 'ativar' : 'desativar'}`),
+  credencial: () => chamar<{ credencial: ResumoCredencial | null }>('GET', '/credenciais'),
+  salvarCredencial: (c: DadosCredencial) => chamar<{ credencial: ResumoCredencial }>('PUT', '/credenciais', c),
+  /** Admin: credentials of another user. */
+  salvarCredencialDe: (usuarioId: string, c: DadosCredencial) =>
+    chamar<{ credencial: ResumoCredencial }>('PUT', `/usuarios/${usuarioId}/credenciais`, c),
+  redefinirSenha: (id: string) =>
+    chamar<{ usuario: UsuarioResumo; senhaTemporaria: string }>('POST', `/usuarios/${id}/redefinir-senha`),
 };

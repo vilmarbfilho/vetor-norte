@@ -6,16 +6,26 @@ import { chaveHmacCpf } from './utils/cpf-hash.ts';
 import { config } from './config/env.ts';
 import { conectarBanco } from './db/client.ts';
 import { RepositorioContasPg } from './repositories/accounts.ts';
+import { RepositorioCredenciaisPg } from './repositories/credentials.ts';
+import { chaveCredenciais } from './utils/credentials-crypto.ts';
 import { RepositorioChavesPg } from './repositories/keys.ts';
+import { RepositorioUsuariosPg } from './repositories/users.ts';
 import { RepositorioMonitoramentoPg } from './repositories/monitoring.ts';
 
 const sql = conectarBanco(config.databaseUrl);
 const contas = new RepositorioContasPg(sql);
 const app = criarApp({
-  repositorios: { contas, monitoramento: new RepositorioMonitoramentoPg(sql), chaves: new RepositorioChavesPg(sql) },
+  repositorios: {
+    contas,
+    usuarios: new RepositorioUsuariosPg(sql),
+    credenciais: new RepositorioCredenciaisPg(sql),
+    monitoramento: new RepositorioMonitoramentoPg(sql),
+    chaves: new RepositorioChavesPg(sql),
+  },
   sessao: config.sessao,
   login: config.login,
   chaveHmacCpf: chaveHmacCpf(process.env.CPF_HMAC_CHAVE),
+  chaveCredenciais: chaveCredenciais(process.env.CREDENCIAIS_CHAVE),
   logger: true,
   // Built by `npm run build` (vite) into dashboard/web/dist.
   pastaWeb: fileURLToPath(new URL('../web/dist', import.meta.url)),

@@ -13,7 +13,7 @@ export class RepositorioChavesFake implements RepositorioChaves {
 
   adicionar(segredo: string, chave: Partial<ChaveApi> & Pick<ChaveApi, 'id'>): this {
     this.chaves.set(hashDaChave(segredo), {
-      nome: chave.id, prefixo: segredo.slice(0, 11), limitePorMinuto: null,
+      nome: chave.id, prefixo: segredo.slice(0, 11), usuarioId: 'usuario-teste', limitePorMinuto: null,
       permissoes: ['protocolos:listar', 'pdf:baixar', 'pdf:enviar'], ...chave,
     });
     return this;
