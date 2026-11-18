@@ -1,4 +1,4 @@
-// Utilitários de CPF: normalização, validação de dígitos e formatação.
+// CPF utilities: normalization, check-digit validation and formatting.
 
 export function somenteDigitos(valor: string): string {
   return valor.replace(/\D/g, '');
@@ -20,12 +20,12 @@ export function cpfValido(valor: string): boolean {
   return d1 === Number(cpf[9]) && d2 === Number(cpf[10]);
 }
 
-/** 01462393685 -> 014.623.936-85 (formato que o portal usa) */
+/** 52998224725 -> 529.982.247-25 (the format the portal uses) */
 export function formatarCpf(valor: string): string {
   return somenteDigitos(valor).replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
 }
 
-/** CPF (11 dígitos) ou CNPJ (14 dígitos) no formato com máscara que o portal exige. */
+/** CPF (11 digits) or CNPJ (14 digits) in the masked format the portal requires. */
 export function formatarDocumento(valor: string): string {
   const d = somenteDigitos(valor);
   if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');

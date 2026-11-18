@@ -1,9 +1,9 @@
-// Etapa 2: script isolado (sem API).
+// Standalone scraper CLI (no API), useful for debugging the portal automation.
 //
-// Uso:
-//   npm run etapa2 -- <cpf>                    → lista os protocolos do CPF
-//   npm run etapa2 -- <cpf> <protocolo>        → lista e baixa o PDF desse protocolo
-//   npm run etapa2 -- --protocolo <protocolo>  → busca só pelo nº do protocolo e baixa o PDF
+// Usage:
+//   npm run cli -- <cpf>                    → list the CPF's protocols
+//   npm run cli -- <cpf> <protocolo>        → list and download that protocol's PDF
+//   npm run cli -- --protocolo <protocolo>  → search by protocol number only and download the PDF
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,7 +20,7 @@ import {
   type Protocolo,
 } from '../scraper/portal.ts';
 
-// ---- argumentos ----
+// ---- arguments ----
 const args = process.argv.slice(2);
 let filtros: FiltrosBusca;
 let protocoloParaBaixar: string | undefined;
@@ -29,7 +29,7 @@ if (args[0] === '--protocolo' && args[1]) {
   protocoloParaBaixar = args[1].trim();
   filtros = { protocolo: protocoloParaBaixar };
 } else if (args[0] && [11, 14].includes(somenteDigitos(args[0]).length)) {
-  // Validação local antes de abrir o navegador: CPF inválido não consulta o portal.
+  // Local validation before opening the browser: an invalid CPF never reaches the portal.
   if (somenteDigitos(args[0]).length === 11 && !cpfValido(args[0])) {
     console.error(`❌ CPF inválido: ${args[0]}`);
     process.exit(1);
@@ -37,11 +37,11 @@ if (args[0] === '--protocolo' && args[1]) {
   filtros = { documento: args[0] };
   protocoloParaBaixar = args[1]?.trim();
 } else {
-  console.error('Uso: npm run etapa2 -- <cpf> [protocolo]  |  npm run etapa2 -- --protocolo <protocolo>');
+  console.error('Uso: npm run cli -- <cpf> [protocolo]  |  npm run cli -- --protocolo <protocolo>');
   process.exit(1);
 }
 
-// ---- execução ----
+// ---- execution ----
 const browser = await chromium.launch({ headless: config.headless });
 const context = await browser.newContext();
 await prepararContexto(context);
@@ -89,7 +89,7 @@ try {
 
   console.log(`⏱  Tempo total: ${tempo()}`);
 } catch (erro) {
-  // Em caso de falha, salva screenshot de todas as abas para diagnóstico.
+  // On failure, save screenshots of every tab for diagnostics.
   const pastaErro = path.join(config.downloadDir, 'erros');
   await mkdir(pastaErro, { recursive: true });
   for (const [i, p] of context.pages().entries()) {

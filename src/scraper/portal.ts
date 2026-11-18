@@ -1,24 +1,24 @@
-// Passos da automação no portal, cada um isolado em uma função.
-// Os seletores evitam IDs dinâmicos que o codegen gravou (iframe name, id da linha).
+// Portal automation steps, each isolated in its own function.
+// Selectors avoid the dynamic ids recorded by codegen (iframe name, row id).
 
 import type { BrowserContext, Page } from 'playwright';
 import { formatarDocumento, somenteDigitos } from '../utils/cpf.ts';
 
 const log = (msg: string) => console.log(`[portal] ${msg}`);
 
-/** Seletor do botão "⋮" de cada protocolo (o sufixo é o id interno do protocolo). */
+/** Selector for each protocol's "⋮" menu button (the suffix is the protocol's internal id). */
 const MENU_LINHA = '[id^="demo-menu-lower-right_"]';
-/** Limite de páginas por busca (proteção contra loop se o site mudar). */
+/** Max pages per search (guards against an endless loop if the site changes). */
 const MAX_PAGINAS = 50;
 
 /**
- * Filtros aceitos pela tela de Protocolo. Cada um vira um parâmetro da URL de busca
- * (a busca do Broker é um formulário GET: buscaProtocolosNovo.php?txtCpfSegurado=...).
+ * Filters accepted by the Protocolo screen. Each one becomes a search URL parameter
+ * (the Broker search is a GET form: buscaProtocolosNovo.php?txtCpfSegurado=...).
  */
 export interface FiltrosBusca {
-  /** CPF ou CNPJ do segurado (com ou sem máscara). */
+  /** Insured person's CPF or CNPJ (masked or digits only). */
   documento?: string;
-  /** Número do protocolo ([NP]). */
+  /** Protocol number ([NP]). */
   protocolo?: string;
   proposta?: string;
   apolice?: string;
@@ -33,7 +33,7 @@ const PARAMETRO_DO_FILTRO: Record<keyof FiltrosBusca, string> = {
   nomeSegurado: 'txtNomeSegurado',
 };
 
-/** Valores padrão do formulário, iguais aos que a tela envia ao clicar em Buscar. */
+/** Default form values, identical to what the screen sends when clicking Buscar. */
 const PARAMETROS_PADRAO =
   'busca=ok&txtProdutor=&txtCompanhia=0&txtRamo=&txtNomeSegurado=&txtTelefone=&txtCpfSegurado=' +
   '&txtNrProtocolo=&txtNrProposta=&txtNrApolice=&txtNrEndosso=&txtDtVigenciaInicio=&txtDtVigenciaFim=' +
@@ -42,11 +42,11 @@ const PARAMETROS_PADRAO =
   '&txtValorOrdem=lojacobr.protocolo.data&txtOrdem=desc';
 
 export interface Protocolo {
-  /** Id interno do Broker (usado nas URLs: /protocolo/visualizar/<idInterno>). */
+  /** Broker internal id (used in URLs: /protocolo/visualizar/<idInterno>). */
   idInterno: string;
-  /** Número do protocolo ([NP]). */
+  /** Protocol number ([NP]). */
   protocolo: string;
-  /** Tipo do protocolo ([TP]), ex: "Principal". */
+  /** Protocol type ([TP]), e.g. "Principal". */
   tipo: string;
   dataProtocolo: string;
   vigenciaInicio: string;
@@ -61,21 +61,21 @@ export interface Protocolo {
   statusSinistro: string;
   proposta: string;
   apolice: string;
-  /** URL do "PDF da Proposta" no Broker (null se o protocolo não tiver PDF). */
+  /** Broker URL of the "PDF da Proposta" (null when the protocol has no PDF). */
   pdfUrl: string | null;
 }
 
 /**
- * Deve ser chamado logo após criar o contexto, antes de abrir páginas.
- * O tsx/esbuild envolve funções nomeadas em `__name(fn, "nome")`. Esse helper existe
- * no Node, mas não no navegador, e quebra os callbacks de page.evaluate.
- * Definimos um __name inofensivo em toda página do contexto.
+ * Must be called right after creating the context, before opening pages.
+ * tsx/esbuild wraps named functions in `__name(fn, "name")`. That helper exists in
+ * Node but not in the browser, which breaks page.evaluate callbacks.
+ * We define a harmless __name on every page of the context.
  */
 export async function prepararContexto(context: BrowserContext): Promise<void> {
   await context.addInitScript('globalThis.__name = globalThis.__name || ((fn) => fn);');
 }
 
-/** Etapa A: faz login no portal de acesso. */
+/** Step A: log in to the access portal. */
 export async function login(page: Page, url: string, email: string, senha: string): Promise<void> {
   log('Abrindo página de login');
   await page.goto(url);
@@ -83,29 +83,29 @@ export async function login(page: Page, url: string, email: string, senha: strin
   await page.getByRole('textbox', { name: 'Senha' }).fill(senha);
   await page.getByRole('button', { name: 'Entrar' }).click();
 
-  // Login ok = o botão do Broker aparece.
+  // Login succeeded = the Broker button shows up.
   await page.getByRole('button', { name: /^Broker/ }).waitFor({ timeout: 20_000 });
   log('Login OK');
 }
 
-/** Etapa B: abre o sistema Broker (ele abre em uma nova aba/popup). */
+/** Step B: open the Broker system (it opens in a new tab/popup). */
 export async function abrirBroker(page: Page): Promise<Page> {
   log('Abrindo Broker');
   const popupPromise = page.waitForEvent('popup');
   await page.getByRole('button', { name: /^Broker/ }).click();
   const broker = await popupPromise;
   await registrarFechamentoDeOverlays(broker);
-  // A aba passa por redirecionamentos (integrador -> menu.php). Só está pronta
-  // quando o painel aparece; navegar antes disso aborta (net::ERR_ABORTED).
+  // The tab goes through redirects (integrador -> menu.php). It is only ready once
+  // the dashboard shows up; navigating earlier aborts (net::ERR_ABORTED).
   await broker.getByRole('link', { name: /^\W*Protocolo$/ }).waitFor({ timeout: 60_000 });
   log('Painel do Broker carregado');
   return broker;
 }
 
 /**
- * O Broker abre modais em momentos imprevisíveis (colorbox de avisos/campanhas,
- * widget do announcekit). Com addLocatorHandler, antes de CADA ação o Playwright
- * verifica se algum deles está na frente e o fecha. Não importa quando ele aparece.
+ * The Broker opens modals at unpredictable times (colorbox with notices/campaigns,
+ * announcekit widget). With addLocatorHandler, before EVERY action Playwright checks
+ * whether one of them is in the way and closes it, no matter when it appears.
  */
 async function registrarFechamentoDeOverlays(page: Page): Promise<void> {
   const colorbox = page.locator('#colorbox');
@@ -122,7 +122,7 @@ async function registrarFechamentoDeOverlays(page: Page): Promise<void> {
     } else {
       await page.keyboard.press('Escape');
     }
-    // Último recurso: se continuou aberto, remove do DOM.
+    // Last resort: if it is still open, remove it from the DOM.
     await page.waitForTimeout(500);
     if (await colorbox.isVisible()) {
       await page.evaluate(() =>
@@ -148,15 +148,15 @@ async function registrarFechamentoDeOverlays(page: Page): Promise<void> {
 }
 
 /**
- * Etapa C: busca protocolos navegando direto para a URL de busca (sem preencher o
- * formulário, cujo campo de CPF é limpo pela própria página durante o carregamento).
- * Percorre todas as páginas de resultado.
+ * Step C: search protocols by navigating straight to the search URL (instead of filling
+ * the form, whose CPF field is cleared by the page itself while it loads).
+ * Walks through every result page.
  */
 export async function buscarProtocolos(broker: Page, filtros: FiltrosBusca): Promise<Protocolo[]> {
   const params = new URLSearchParams(PARAMETROS_PADRAO);
   for (const [campo, valor] of Object.entries(filtros) as [keyof FiltrosBusca, string | undefined][]) {
     if (!valor) continue;
-    // O portal só encontra o documento no formato com máscara (014.628.966-85).
+    // The portal only finds the document when it is masked (529.982.247-25).
     params.set(PARAMETRO_DO_FILTRO[campo], campo === 'documento' ? formatarDocumento(valor) : valor.trim());
   }
   const urlBusca = new URL('/broker/buscaProtocolosNovo.php', broker.url());
@@ -168,7 +168,7 @@ export async function buscarProtocolos(broker: Page, filtros: FiltrosBusca): Pro
     urlBusca.search = params.toString();
     await broker.goto(urlBusca.toString(), { waitUntil: 'domcontentloaded' });
 
-    // "8 resultados encontrados" / "0 resultados encontrados"
+    // Summary text: "8 resultados encontrados" / "0 resultados encontrados"
     const resumo = await broker
       .getByText(/\d+\s+resultados? encontrados?/i)
       .first()
@@ -182,7 +182,7 @@ export async function buscarProtocolos(broker: Page, filtros: FiltrosBusca): Pro
     if (daPagina.length === 0 || protocolos.length >= total) break;
   }
 
-  // Garantia: com filtro de documento, nenhuma linha pode ser de outro segurado.
+  // Privacy guard: with a document filter, no row may belong to another insured person.
   if (filtros.documento) {
     const doc = somenteDigitos(filtros.documento);
     const outros = protocolos.filter((p) => somenteDigitos(p.seguradoDocumento) !== doc);
@@ -198,17 +198,17 @@ export async function buscarProtocolos(broker: Page, filtros: FiltrosBusca): Pro
 }
 
 /**
- * Lê a tabela de resultados. Estrutura real do Broker:
- *  - cada protocolo = 1 linha principal (com o botão de menu) + linhas de detalhe
- *    (colspan=9) com Proposta/Apólice, hierarquia e itens;
- *  - colunas principais localizadas pelo TEXTO do cabeçalho, não pela posição.
+ * Reads the results table. Actual Broker structure:
+ *  - each protocol = 1 main row (with the menu button) + detail rows
+ *    (colspan=9) with Proposta/Apólice, sales hierarchy and items;
+ *  - main columns are located by header TEXT, not by position.
  */
 export async function extrairTabela(broker: Page): Promise<Protocolo[]> {
   return broker.evaluate((seletorMenu) => {
     const limpar = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
     const normalizar = (s: string) =>
       limpar(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-    // Texto da célula preservando as quebras de <br> (uma linha por item).
+    // Cell text keeping <br> line breaks (one line per item).
     const linhasDe = (el: Element | undefined) => {
       if (!el) return [] as string[];
       const clone = el.cloneNode(true) as HTMLElement;
@@ -242,12 +242,12 @@ export async function extrairTabela(broker: Page): Promise<Protocolo[]> {
       const tds = Array.from(linha.children).filter((c) => c.tagName === 'TD');
       const celula = (nome: string) => tds[indice(nome)];
 
-      // Protocolo: "[NP] 18754914 [TP] Principal"
+      // Protocolo: "[NP] 12345678 [TP] Principal"
       const txtProtocolo = limpar(celula('protocolo')?.textContent);
       const protocolo = /\[NP\]\s*(\S+)/.exec(txtProtocolo)?.[1] ?? txtProtocolo;
       const tipo = /\[TP\]\s*(.+?)(?=\s*\[|$)/.exec(txtProtocolo)?.[1] ?? '';
 
-      // Segurado: "NOME<br>(701.528.968-72)"
+      // Segurado: "NAME<br>(529.982.247-25)"
       const txtSegurado = limpar(celula('segurado')?.textContent);
       const seguradoDocumento = /\(([\d./-]+)\)/.exec(txtSegurado)?.[1] ?? '';
       const seguradoNome = limpar(txtSegurado.replace(/\([\d./-]+\)/, ''));
@@ -257,10 +257,10 @@ export async function extrairTabela(broker: Page): Promise<Protocolo[]> {
       const [ramo = '', produto = ''] = linhasDe(celSeguradora);
       const seguradora = celSeguradora?.querySelector('img')?.getAttribute('alt') ?? '';
 
-      // Status proposta / sinistro dividem a mesma coluna.
+      // Status proposta / sinistro share the same column.
       const [statusProposta = '', ...sinistro] = linhasDe(celula('statusPropostaSinistro'));
 
-      // Linhas de detalhe até o próximo protocolo: Proposta / Apólice.
+      // Detail rows up to the next protocol: Proposta / Apólice.
       let detalhe = '';
       for (let tr = linha.nextElementSibling; tr && !tr.querySelector(seletorMenu); tr = tr.nextElementSibling) {
         detalhe += ' ' + limpar(tr.textContent);
@@ -268,7 +268,7 @@ export async function extrairTabela(broker: Page): Promise<Protocolo[]> {
       const proposta = /Proposta:\s*(\S+)/.exec(detalhe)?.[1] ?? '';
       const apolice = limpar(/Apolice:\s*(.+?)(?=\s+Regional|\s+Item:|$)/.exec(detalhe)?.[1]);
 
-      // URL do PDF: está no onclick do item "PDF da Proposta" do menu desta linha.
+      // PDF URL: lives in the onclick of the "PDF da Proposta" item of this row's menu.
       const itemPdf = Array.from(document.querySelectorAll(`ul[for="${menu.id}"] li`)).find((li) =>
         (li.textContent ?? '').includes('PDF da Proposta'),
       );
@@ -298,9 +298,9 @@ export async function extrairTabela(broker: Page): Promise<Protocolo[]> {
 }
 
 /**
- * Etapa D: baixa o "PDF da Proposta" pela URL extraída da tabela.
- * context.request usa os mesmos cookies da sessão logada e segue o redirecionamento
- * para a URL pré-assinada do S3. Não precisa clicar no menu nem abrir aba.
+ * Step D: download the "PDF da Proposta" from the URL extracted from the table.
+ * context.request reuses the logged-in session cookies and follows the redirect to the
+ * pre-signed S3 URL. No menu clicks or new tabs needed.
  */
 export async function baixarPdfProposta(
   context: BrowserContext,
@@ -320,7 +320,7 @@ export async function baixarPdfProposta(
   return conteudo;
 }
 
-/** Diagnóstico: HTML da tabela de resultados (só para desenvolvimento). */
+/** Diagnostics: HTML of the results table (development only). */
 export async function htmlDosResultados(broker: Page): Promise<string> {
   const tabela = broker.locator('table').filter({ has: broker.locator(MENU_LINHA) }).first();
   if (await tabela.count()) return tabela.evaluate((el) => el.outerHTML);

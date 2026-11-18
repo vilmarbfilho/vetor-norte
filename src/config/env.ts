@@ -1,9 +1,9 @@
-// Carrega e valida as variáveis de ambiente (.env) uma única vez.
+// Loads and validates environment variables (.env) once.
 
 try {
-  process.loadEnvFile(); // nativo do Node, lê ./.env
+  process.loadEnvFile(); // built into Node, reads ./.env
 } catch {
-  // Sem .env: segue com as variáveis do ambiente (útil em Docker/CI).
+  // No .env: fall back to process environment variables (useful in Docker/CI).
 }
 
 function obrigatoria(nome: string): string {
@@ -18,4 +18,6 @@ export const config = {
   senha: obrigatoria('PORTAL_SENHA'),
   headless: process.env.HEADLESS !== 'false',
   downloadDir: process.env.DOWNLOAD_DIR ?? 'downloads',
+  porta: Number(process.env.PORT ?? 3000),
+  host: process.env.HOST ?? '127.0.0.1',
 } as const;
