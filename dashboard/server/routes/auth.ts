@@ -54,8 +54,9 @@ export function rotasAuth(app: FastifyInstance, o: OpcoesRotasAuth): void {
       });
       await o.contas.registrarLogin(usuario.id);
       reply.setCookie(COOKIE_SESSAO, token, { ...opcoesCookie, maxAge: Math.floor(o.duracaoMaximaMs / 1000) });
-      const { id, nome, email: emailCadastrado, idioma } = usuario;
-      return { usuario: { id, nome, email: emailCadastrado, idioma } };
+      const { senhaHash: _h, ativo: _a, ...publico } = usuario;
+      // trocarSenha = true: the frontend must ask for a new password before anything else.
+      return { usuario: publico };
     },
   );
 
@@ -67,13 +68,17 @@ export function rotasAuth(app: FastifyInstance, o: OpcoesRotasAuth): void {
     return reply.status(204).send();
   });
 
-  app.get('/api/auth/eu', async (req) => ({ usuario: req.usuario }));
+  // Always available, also while a temporary password must be changed.
+  const meu = { acesso: 'todos', duranteTrocaSenha: true } as const;
+
+  app.get('/api/auth/eu', { config: meu }, async (req) => ({ usuario: req.usuario }));
 
   // Change my own password: requires the current one (a stolen open session alone is not enough),
   // counts wrong attempts in the same brute-force block as login, and ends the user's other sessions.
   app.post<{ Body: { senhaAtual: string; novaSenha: string } }>(
     '/api/auth/eu/senha',
     {
+      config: meu,
       schema: {
         body: {
           type: 'object', required: ['senhaAtual', 'novaSenha'], additionalProperties: false,
@@ -113,6 +118,7 @@ export function rotasAuth(app: FastifyInstance, o: OpcoesRotasAuth): void {
   app.patch<{ Body: { idioma: Idioma } }>(
     '/api/auth/eu',
     {
+      config: meu,
       schema: {
         body: {
           type: 'object', required: ['idioma'], additionalProperties: false,

@@ -1,14 +1,22 @@
-// Request guards for /api: CSRF check on state-changing requests and session cookie validation.
-// Routes opt out of the session check with { config: { publica: true } } (login, logout, health).
+// Request guards for /api: CSRF check on state-changing requests, session cookie validation, forced
+// password change and access by profile.
+// - { config: { publica: true } }: no session needed (login, logout, health).
+// - { config: { acesso: 'todos' | 'admin' | <tela> } }: required on every other /api route (checked at startup).
+// - { config: { duranteTrocaSenha: true } }: still allowed while the user must change a temporary password.
 
 import type { FastifyInstance } from 'fastify';
 import type { RepositorioContas, Usuario } from '../repositories/types.ts';
+import { podeAcessar, type Acesso } from './access.ts';
 import { COOKIE_SESSAO, hashToken } from './tokens.ts';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
     /** No logged-in session needed. */
     publica?: boolean;
+    /** Who may call this route (see access.ts). */
+    acesso?: Acesso;
+    /** Allowed while the user still has to change a temporary password. */
+    duranteTrocaSenha?: boolean;
   }
   interface FastifyRequest {
     /** Logged-in user (set by the session guard). */
@@ -28,6 +36,14 @@ export function registrarGuardas(
   app: FastifyInstance,
   opcoes: { contas: RepositorioContas; inatividadeMs: number; cookieSeguro: boolean },
 ): void {
+  // Fail at startup, not at runtime: a protected route without a declared access level is a bug.
+  app.addHook('onRoute', (rota) => {
+    const url = rota.url ?? '';
+    if (url.startsWith('/api/') && !rota.config?.publica && !rota.config?.acesso) {
+      throw new Error(`Rota ${rota.method} ${url} sem config.acesso`);
+    }
+  });
+
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return; // static frontend files
 
@@ -49,5 +65,14 @@ export function registrarGuardas(
     req.usuario = sessao.usuario;
     req.sessaoId = sessao.sessaoId;
     opcoes.contas.tocarSessao(sessao.sessaoId).catch((e: Error) => req.log.warn(`falha ao renovar sessão: ${e.message}`));
+
+    const config = req.routeOptions.config;
+    if (sessao.usuario.trocarSenha && !config.duranteTrocaSenha) {
+      return reply.status(403).send({ erro: 'Defina uma nova senha para continuar', codigo: 'troca_senha_obrigatoria' });
+    }
+    // Unknown /api URLs have no config: they fall through to the JSON 404.
+    if (config.acesso && !podeAcessar(sessao.usuario, config.acesso)) {
+      return reply.status(403).send({ erro: 'Acesso não permitido', codigo: 'acesso_negado' });
+    }
   });
 }

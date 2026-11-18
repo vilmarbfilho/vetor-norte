@@ -1,17 +1,9 @@
 // App shell: side navigation (top bar on small screens), language selector, sign out.
 import type { ReactNode } from 'react';
+import type { Pagina } from '../acesso';
 import type { Usuario } from '../api';
 import { useIdioma, type Idioma } from '../i18n';
-import type { ChaveTexto } from '../i18n/en';
 import { Link, useRota } from '../router';
-
-const ITENS: { caminho: string; texto: ChaveTexto }[] = [
-  { caminho: '/logs', texto: 'nav.logs' },
-  { caminho: '/consultas', texto: 'nav.consultas' },
-  { caminho: '/downloads', texto: 'nav.downloads' },
-  { caminho: '/chaves', texto: 'nav.chaves' },
-  { caminho: '/conta', texto: 'nav.conta' },
-];
 
 export function SeletorIdioma({ aoMudar }: { aoMudar: (i: Idioma) => void }) {
   const { idioma, t } = useIdioma();
@@ -26,8 +18,11 @@ export function SeletorIdioma({ aoMudar }: { aoMudar: (i: Idioma) => void }) {
   );
 }
 
-export function Layout({ usuario, aoSair, aoMudarIdioma, children }: {
-  usuario: Usuario; aoSair: () => void; aoMudarIdioma: (i: Idioma) => void; children: ReactNode;
+/** `paginas`: only the pages this user's profile allows (see acesso.ts). */
+export function Layout({ usuario, paginas, aoSair, aoMudarIdioma, aviso, children }: {
+  usuario: Usuario; paginas: Pagina[]; aoSair: () => void; aoMudarIdioma: (i: Idioma) => void;
+  /** Banner above every page (e.g. invalid portal credentials). */
+  aviso?: ReactNode; children: ReactNode;
 }) {
   const { t } = useIdioma();
   const { caminho } = useRota();
@@ -42,7 +37,7 @@ export function Layout({ usuario, aoSair, aoMudarIdioma, children }: {
           </div>
         </div>
         <nav className="menu">
-          {ITENS.map((i) => (
+          {paginas.map((i) => (
             <Link key={i.caminho} para={i.caminho} className="menu-item" aria-current={caminho === i.caminho ? 'page' : undefined}>
               {t(i.texto)}
             </Link>
@@ -51,12 +46,12 @@ export function Layout({ usuario, aoSair, aoMudarIdioma, children }: {
         <div className="lateral-rodape">
           <SeletorIdioma aoMudar={aoMudarIdioma} />
           <div className="usuario">
-            <span title={usuario.email}>{usuario.nome}</span>
+            <span title={`${usuario.email} · ${t(`perfil.${usuario.perfil}`)}`}>{usuario.nome}</span>
             <button type="button" className="botao-link" onClick={aoSair}>{t('nav.sair')}</button>
           </div>
         </div>
       </aside>
-      <main className="conteudo">{children}</main>
+      <main className="conteudo">{aviso}{children}</main>
     </div>
   );
 }

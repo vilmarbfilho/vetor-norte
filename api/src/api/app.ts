@@ -11,6 +11,7 @@ import type { Protocolo } from '../scraper/portal.ts';
 import { documentoDoPdf, enviarPdf, nomeArquivoPdf } from '../services/documents.ts';
 import type { FiltrosListagem } from '../services/filters.ts';
 import type { ServicoProtocolos } from '../services/protocols.ts';
+import { ErroCredenciais } from '../scraper/sessions.ts';
 import { cpfValido, formatarCpf, somenteDigitos } from '../utils/cpf.ts';
 
 const DATA = { type: 'string', pattern: '^(\\d{4}-\\d{2}-\\d{2}|\\d{2}/\\d{2}/\\d{4})$' } as const;
@@ -107,8 +108,12 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
 
   registrarAutenticacao(app, opcoes.autenticacao);
 
-  // Validation errors -> 400 with a readable message; anything else -> 502 (portal query failed).
+  // Validation errors -> 400 with a readable message; missing/refused portal credentials -> 409
+  // (the key owner must fix them in the dashboard; not an error log); anything else -> 502 (portal query failed).
   app.setErrorHandler<FastifyError>((erro, req, reply) => {
+    if (erro instanceof ErroCredenciais) {
+      return reply.status(409).send({ erro: erro.message, codigo: erro.codigo });
+    }
     req.erroCapturado = erro;
     if (erro.validation) {
       return reply.status(400).send({ erro: 'Parâmetros inválidos', detalhes: erro.message });
@@ -136,6 +141,7 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
         ...(erro instanceof ErroEntrega ? { destino: erro.destino } : {}),
       },
       apiKeyId: req.chaveApi?.id ?? null,
+      usuarioId: req.chaveApi?.usuarioId ?? null,
       requestId: req.id,
     });
   });
@@ -147,6 +153,7 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
       const registro: RegistroDownload = {
         protocolo: req.params.protocolo, tipo, destino: destino ?? null, resultado, tamanhoBytes,
         duracaoMs: performance.now() - inicio, apiKeyId: req.chaveApi?.id ?? null,
+        usuarioId: req.chaveApi?.usuarioId ?? null,
       };
       auditoria.download(registro);
     };
@@ -174,12 +181,13 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
         auditoria.consulta({
           cpf, filtros: { ...filtros }, resultado, protocolos: numeros,
           duracaoMs: performance.now() - inicio, apiKeyId: req.chaveApi?.id ?? null,
+          usuarioId: req.chaveApi?.usuarioId ?? null,
         });
       let protocolos;
       try {
-        protocolos = await servico.listarPorCpf(cpf, filtros);
+        protocolos = await servico.listarPorCpf(req.chaveApi!.usuarioId, cpf, filtros);
       } catch (e) {
-        registrar('erro');
+        if (!(e instanceof ErroCredenciais)) registrar('erro'); // 409: the portal was not queried
         throw e;
       }
       registrar('ok', protocolos.map((p) => p.protocolo));
@@ -194,9 +202,9 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
       const registrar = historicoPdf(req, req.query.formato);
       let resultado;
       try {
-        resultado = await servico.obterPdf(req.params.protocolo);
+        resultado = await servico.obterPdf(req.chaveApi!.usuarioId, req.params.protocolo);
       } catch (e) {
-        registrar('erro');
+        if (!(e instanceof ErroCredenciais)) registrar('erro'); // 409: the portal was not queried
         throw e;
       }
       registrar(resultado.tipo, resultado.tipo === 'ok' ? resultado.pdf.length : null);
@@ -228,9 +236,9 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
       const registrar = historicoPdf(req, 'envio', destino);
       let resultado;
       try {
-        resultado = await enviarPdf(servico, destinos, req.params.protocolo, destino, pedido);
+        resultado = await enviarPdf(servico, req.chaveApi!.usuarioId, destinos, req.params.protocolo, destino, pedido);
       } catch (e) {
-        registrar('erro'); // portal failure or delivery failure (ErroEntrega)
+        if (!(e instanceof ErroCredenciais)) registrar('erro'); // portal/delivery failure (409 credentials: not history)
         throw e;
       }
       // An unknown destination is a caller mistake: nothing was fetched, so it is not history.

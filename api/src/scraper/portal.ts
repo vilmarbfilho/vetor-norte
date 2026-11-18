@@ -75,16 +75,48 @@ export async function prepararContexto(context: BrowserContext): Promise<void> {
   await context.addInitScript('globalThis.__name = globalThis.__name || ((fn) => fn);');
 }
 
-/** Step A: log in to the access portal. */
+/**
+ * The portal refused the e-mail/password (wrong or expired). Not a technical failure: retrying would not
+ * help and repeated attempts could lock the account, so callers must stop using these credentials.
+ */
+export class ErroLoginRecusado extends Error {
+  constructor(motivo: string) {
+    super(`Login recusado pelo portal: ${motivo}`);
+    this.name = 'ErroLoginRecusado';
+  }
+}
+
+/** The SSO endpoint the login form posts to (seen in recon: 400 + "Credenciais inválidas" on bad login). */
+const ehRespostaDeLogin = (r: { url(): string; request(): { method(): string } }) =>
+  r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/auth';
+
+/**
+ * Step A: log in to the access portal.
+ * - SSO answers 4xx (except 429) → ErroLoginRecusado (wrong/expired credentials).
+ * - SSO answers 2xx but the Broker button never shows while a password field is still on screen
+ *   (e.g. an expired-password / change-password page) → ErroLoginRecusado as well.
+ * - Anything else (5xx, 429, no answer, timeouts) → a normal Error: a technical failure, retried by the session.
+ */
 export async function login(page: Page, url: string, email: string, senha: string): Promise<void> {
   log('Abrindo página de login');
   await page.goto(url);
   await page.getByRole('textbox', { name: 'E-mail' }).fill(email);
   await page.getByRole('textbox', { name: 'Senha' }).fill(senha);
+  const resposta = page.waitForResponse(ehRespostaDeLogin, { timeout: 30_000 });
   await page.getByRole('button', { name: 'Entrar' }).click();
 
+  const status = (await resposta).status();
+  if (status >= 400 && status < 500 && status !== 429) throw new ErroLoginRecusado(`HTTP ${status}`);
+  if (status >= 400) throw new Error(`Falha no login do portal: HTTP ${status}`);
+
   // Login succeeded = the Broker button shows up.
-  await page.getByRole('button', { name: /^Broker/ }).waitFor({ timeout: 20_000 });
+  try {
+    await page.getByRole('button', { name: /^Broker/ }).waitFor({ timeout: 20_000 });
+  } catch (e) {
+    const pedeSenha = await page.locator('input[type="password"]').first().isVisible().catch(() => false);
+    if (pedeSenha) throw new ErroLoginRecusado('o portal continua pedindo senha (senha expirada?)');
+    throw e;
+  }
   log('Login OK');
 }
 
@@ -100,17 +132,6 @@ export async function abrirBroker(page: Page): Promise<Page> {
   await broker.getByRole('link', { name: /^\W*Protocolo$/ }).waitFor({ timeout: 60_000 });
   log('Painel do Broker carregado');
   return broker;
-}
-
-/**
- * Keep-alive: reloads the Broker dashboard (menu.php), the lightest logged-in page, and checks
- * that the "Protocolo" link is there. Any request with the session cookies renews the portal's
- * session; if it already expired, the page shows something else and this throws (-> re-login).
- * Never runs a search: without filters the search lists other people's protocols.
- */
-export async function verificarSessao(broker: Page): Promise<void> {
-  await broker.goto(new URL('/broker/menu.php', broker.url()).toString(), { waitUntil: 'domcontentloaded' });
-  await broker.getByRole('link', { name: /^\W*Protocolo$/ }).waitFor({ timeout: 30_000 });
 }
 
 /**

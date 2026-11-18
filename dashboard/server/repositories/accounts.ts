@@ -1,18 +1,31 @@
 // Users and login sessions in PostgreSQL.
 
 import type { Sql } from 'postgres';
+import type { Perfil, Tela } from '../auth/access.ts';
+import type { Permissao } from '../auth/api-keys.ts';
 import type { Idioma, RepositorioContas, Usuario } from './types.ts';
+
+/** Columns of `usuarios` that make up a `Usuario` (use with the `u` alias). */
+export interface LinhaUsuario {
+  id: string; nome: string; email: string; idioma: Idioma; perfil: Perfil; telas: Tela[];
+  permissoes_api: Permissao[]; trocar_senha: boolean;
+}
+
+export function paraUsuario(l: LinhaUsuario): Usuario {
+  return {
+    id: l.id, nome: l.nome, email: l.email, idioma: l.idioma, perfil: l.perfil, telas: l.telas,
+    permissoesApi: l.permissoes_api, trocarSenha: l.trocar_senha,
+  };
+}
 
 export class RepositorioContasPg implements RepositorioContas {
   constructor(private readonly sql: Sql) {}
 
   async buscarParaLogin(email: string) {
-    const [u] = await this.sql<
-      { id: string; nome: string; email: string; idioma: Idioma; senha_hash: string; ativo: boolean }[]
-    >`
-      SELECT id, nome, email, idioma, senha_hash, ativo FROM usuarios WHERE lower(email) = lower(${email.trim()})
+    const [u] = await this.sql<(LinhaUsuario & { senha_hash: string; ativo: boolean })[]>`
+      SELECT u.* FROM usuarios u WHERE lower(u.email) = lower(${email.trim()})
     `;
-    return u ? { id: u.id, nome: u.nome, email: u.email, idioma: u.idioma, senhaHash: u.senha_hash, ativo: u.ativo } : null;
+    return u ? { ...paraUsuario(u), senhaHash: u.senha_hash, ativo: u.ativo } : null;
   }
 
   async registrarLogin(usuarioId: string): Promise<void> {
@@ -27,8 +40,8 @@ export class RepositorioContasPg implements RepositorioContas {
   }
 
   async sessaoValida(tokenHash: string, inatividadeMs: number) {
-    const [linha] = await this.sql<{ sessao_id: string; id: string; nome: string; email: string; idioma: Idioma }[]>`
-      SELECT s.id AS sessao_id, u.id, u.nome, u.email, u.idioma
+    const [linha] = await this.sql<(LinhaUsuario & { sessao_id: string })[]>`
+      SELECT s.id AS sessao_id, u.id, u.nome, u.email, u.idioma, u.perfil, u.telas, u.permissoes_api, u.trocar_senha
       FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
       WHERE s.token_hash = ${tokenHash}
         AND s.expira_em > now()
@@ -36,8 +49,7 @@ export class RepositorioContasPg implements RepositorioContas {
         AND u.ativo
     `;
     if (!linha) return null;
-    const usuario: Usuario = { id: linha.id, nome: linha.nome, email: linha.email, idioma: linha.idioma };
-    return { sessaoId: linha.sessao_id, usuario };
+    return { sessaoId: linha.sessao_id, usuario: paraUsuario(linha) };
   }
 
   async tocarSessao(sessaoId: string): Promise<void> {
@@ -63,7 +75,7 @@ export class RepositorioContasPg implements RepositorioContas {
 
   async alterarSenha(usuarioId: string, senhaHash: string, manterSessaoId: string): Promise<void> {
     await this.sql.begin(async (tx) => {
-      await tx`UPDATE usuarios SET senha_hash = ${senhaHash} WHERE id = ${usuarioId}`;
+      await tx`UPDATE usuarios SET senha_hash = ${senhaHash}, trocar_senha = false WHERE id = ${usuarioId}`;
       await tx`DELETE FROM sessoes WHERE usuario_id = ${usuarioId} AND id <> ${manterSessaoId}`;
     });
   }

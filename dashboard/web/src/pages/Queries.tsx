@@ -4,18 +4,22 @@ import { Alerta, CabecalhoPagina, Carregando, Paginacao, Selo, useMensagemErro }
 import { formatarDataHora, formatarDuracao } from '../format';
 import { useIdioma } from '../i18n';
 import { Link } from '../router';
-import { FiltroChave } from './filters';
+import { ehAdmin } from '../acesso';
+import { useUsuarioAtual } from '../sessao';
+import { CampoUsuario, FiltroChave } from './filters';
 import { useListagem, valoresIniciais } from './useListagem';
 
 // Filters kept in the URL. The CPF is NOT: it stays in this page's memory only, so the full CPF never
 // lands in the browser history or address bar (LGPD). Reloading the page drops the CPF filter.
-const CAMPOS = ['de', 'ate', 'protocolo', 'resultado', 'apiKeyId'];
+const CAMPOS = ['de', 'ate', 'protocolo', 'resultado', 'apiKeyId', 'usuarioId'];
 /** How many returned protocol numbers are listed per row before "+N". */
 const MAX_PROTOCOLOS = 5;
 
 export function Consultas() {
   const { t, locale } = useIdioma();
   const mensagemErro = useMensagemErro();
+  // Corretores only see their own queries: the user column/filter would always be them.
+  const admin = ehAdmin(useUsuarioAtual());
   const [cpf, setCpf] = useState('');
   const [cpfAplicado, setCpfAplicado] = useState('');
   const buscar = useCallback(
@@ -65,6 +69,7 @@ export function Consultas() {
             <option value="erro">{t('downloads.resultado.erro')}</option>
           </select>
         </label>
+        <CampoUsuario {...campo('usuarioId')} />
         <div className="filtros-acoes">
           <button type="submit" className="botao botao-primario">{t('comum.filtrar')}</button>
           <button type="button" className="botao" onClick={limpar}>{t('comum.limpar')}</button>
@@ -81,7 +86,7 @@ export function Consultas() {
                   <tr>
                     <th>{t('comum.quando')}</th><th>{t('consultas.cpf')}</th><th>{t('consultas.protocolos')}</th>
                     <th>{t('consultas.filtros')}</th><th>{t('downloads.resultado')}</th>
-                    <th className="num">{t('downloads.duracao')}</th><th>{t('comum.chave')}</th><th>{t('downloads.criadaPor')}</th>
+                    <th className="num">{t('downloads.duracao')}</th><th>{t('comum.chave')}</th>{admin && <th>{t('comum.usuario')}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -94,7 +99,7 @@ export function Consultas() {
                       <td><Selo tom={c.resultado === 'ok' ? 'sucesso' : 'erro'}>{t(`downloads.resultado.${c.resultado}`)}</Selo></td>
                       <td className="num">{formatarDuracao(c.duracaoMs, locale)}</td>
                       <td>{c.apiKey ? <>{c.apiKey.nome} <span className="sutil mono">{c.apiKey.prefixo}…</span></> : <span className="sutil">{t('comum.chaveRemovida')}</span>}</td>
-                      <td>{c.apiKey?.criadaPor?.nome ?? '—'}</td>
+                      {admin && <td>{c.usuario?.nome ?? '—'}</td>}
                     </tr>
                   ))}
                 </tbody>

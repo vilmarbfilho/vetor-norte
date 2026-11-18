@@ -1,14 +1,15 @@
 // Standalone scraper CLI (no API), useful for debugging the portal automation.
 //
-// Usage:
-//   npm run cli -- <cpf>                    → list the CPF's protocols
-//   npm run cli -- <cpf> <protocolo>        → list and download that protocol's PDF
-//   npm run cli -- --protocolo <protocolo>  → search by protocol number only and download the PDF
+// Usage (the portal password is asked at a hidden prompt, never passed as an argument):
+//   npm run cli -- --email <e-mail> <cpf>                    → list the CPF's protocols
+//   npm run cli -- --email <e-mail> <cpf> <protocolo>        → list and download that protocol's PDF
+//   npm run cli -- --email <e-mail> --protocolo <protocolo>  → search by protocol number only and download the PDF
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { config } from '../config/env.ts';
+import { perguntarOculto } from './prompt.ts';
 import { cpfValido, somenteDigitos } from '../utils/cpf.ts';
 import {
   abrirBroker,
@@ -21,7 +22,15 @@ import {
 } from '../scraper/portal.ts';
 
 // ---- arguments ----
+const USO = 'Uso: npm run cli -- --email <e-mail> <cpf> [protocolo]  |  npm run cli -- --email <e-mail> --protocolo <protocolo>';
 const args = process.argv.slice(2);
+const posEmail = args.indexOf('--email');
+const email = posEmail >= 0 ? args[posEmail + 1]?.trim() : undefined;
+if (!email || !email.includes('@')) {
+  console.error(USO);
+  process.exit(1);
+}
+args.splice(posEmail, 2);
 let filtros: FiltrosBusca;
 let protocoloParaBaixar: string | undefined;
 
@@ -37,7 +46,13 @@ if (args[0] === '--protocolo' && args[1]) {
   filtros = { documento: args[0] };
   protocoloParaBaixar = args[1]?.trim();
 } else {
-  console.error('Uso: npm run cli -- <cpf> [protocolo]  |  npm run cli -- --protocolo <protocolo>');
+  console.error(USO);
+  process.exit(1);
+}
+
+const senha = await perguntarOculto('Senha do portal: ');
+if (!senha) {
+  console.error('❌ Senha não informada.');
   process.exit(1);
 }
 
@@ -50,7 +65,7 @@ const tempo = () => `${((Date.now() - inicio) / 1000).toFixed(1)}s`;
 
 try {
   const page = await context.newPage();
-  await login(page, config.portalUrl, config.email, config.senha);
+  await login(page, config.portalUrl, email, senha);
   const broker = await abrirBroker(page);
   const protocolos = await buscarProtocolos(broker, filtros);
 

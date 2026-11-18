@@ -9,8 +9,10 @@ import { registrarGuardas } from './auth/guard.ts';
 import { BloqueioLogin } from './auth/login-throttle.ts';
 import type { Repositorios } from './repositories/types.ts';
 import { rotasAuth } from './routes/auth.ts';
+import { rotasCredenciais } from './routes/credentials.ts';
 import { rotasChaves } from './routes/keys.ts';
 import { rotasMonitoramento } from './routes/monitoring.ts';
+import { rotasUsuarios } from './routes/users.ts';
 import { mascararCpf } from './utils/mask.ts';
 
 export interface OpcoesApp {
@@ -22,6 +24,8 @@ export interface OpcoesApp {
   bloqueio?: BloqueioLogin;
   /** CPF_HMAC_CHAVE: the API's key for CPF hashes in the protocol query history (search by CPF). */
   chaveHmacCpf: string;
+  /** CREDENCIAIS_CHAVE (decoded): encrypts the Broker portal passwords. Same key in the API. */
+  chaveCredenciais: Buffer;
   /** Folder with the built frontend (web/dist). Not served when missing (e.g. tests, before `npm run build`). */
   pastaWeb?: string;
 }
@@ -41,7 +45,7 @@ declare module 'fastify' {
 }
 
 export function criarApp(o: OpcoesApp): FastifyInstance {
-  const { contas, monitoramento, chaves } = o.repositorios;
+  const { contas, usuarios, credenciais, monitoramento, chaves } = o.repositorios;
   const app = Fastify({
     logger: o.logger
       ? {
@@ -109,7 +113,7 @@ export function criarApp(o: OpcoesApp): FastifyInstance {
         metodo: req.method, rota: req.routeOptions.url ?? null, statusHttp: reply.statusCode,
         mensagem: erro?.message || `HTTP ${reply.statusCode}`,
         detalhes: { url: req.url, ...(erro ? { tipo: erro.name, stack: erro.stack ?? '' } : {}) },
-        requestId: req.id,
+        requestId: req.id, usuarioId: req.usuario?.id ?? null,
       });
     });
 
@@ -119,7 +123,9 @@ export function criarApp(o: OpcoesApp): FastifyInstance {
       bloqueio: o.bloqueio ?? new BloqueioLogin(o.login.maxTentativas, o.login.bloqueioMs),
     });
     rotasMonitoramento(app, monitoramento, o.chaveHmacCpf);
-    rotasChaves(app, chaves);
+    rotasChaves(app, chaves, usuarios);
+    rotasUsuarios(app, usuarios);
+    rotasCredenciais(app, credenciais, o.chaveCredenciais);
   });
 
   return app;

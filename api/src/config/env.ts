@@ -14,8 +14,6 @@ function inteiroPositivo(nome: string, padrao: number): number {
 
 export const config = {
   portalUrl: obrigatoria('PORTAL_URL'),
-  email: obrigatoria('PORTAL_EMAIL'),
-  senha: obrigatoria('PORTAL_SENHA'),
   headless: process.env.HEADLESS !== 'false',
   downloadDir: process.env.DOWNLOAD_DIR ?? 'downloads',
   porta: Number(process.env.PORT ?? 3000),
@@ -27,11 +25,11 @@ export const config = {
     habilitado: process.env.RATE_LIMIT_HABILITADO !== 'false',
     porMinutoPadrao: inteiroPositivo('RATE_LIMIT_POR_MINUTO', 60),
   },
-  keepAlive: {
-    // Enabled unless explicitly set to "false".
-    habilitado: process.env.KEEPALIVE_HABILITADO !== 'false',
-    // Idle time after which the session is checked/renewed.
-    intervaloMs: inteiroPositivo('KEEPALIVE_INTERVALO_MINUTOS', 10) * 60_000,
+  sessoes: {
+    // A user's portal session is closed after this idle time (the next request logs in again, ~7 s).
+    ociosaMs: inteiroPositivo('SESSAO_OCIOSA_MINUTOS', 15) * 60_000,
+    // Max portal sessions open at once (one per user); the most idle one is closed to make room.
+    max: inteiroPositivo('SESSOES_MAX', 5),
   },
   retencao: {
     // LGPD: rows older than this are deleted daily.

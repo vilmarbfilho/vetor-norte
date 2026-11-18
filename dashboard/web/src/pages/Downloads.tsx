@@ -3,15 +3,19 @@ import { api, type Download } from '../api';
 import { Alerta, CabecalhoPagina, Carregando, Paginacao, Selo, useMensagemErro, type Tom } from '../components/ui';
 import { formatarBytes, formatarDataHora, formatarDuracao } from '../format';
 import { useIdioma } from '../i18n';
-import { FiltroChave } from './filters';
+import { ehAdmin } from '../acesso';
+import { useUsuarioAtual } from '../sessao';
+import { CampoUsuario, FiltroChave } from './filters';
 import { useListagem, valoresIniciais } from './useListagem';
 
-const CAMPOS = ['de', 'ate', 'protocolo', 'tipo', 'resultado', 'apiKeyId'];
+const CAMPOS = ['de', 'ate', 'protocolo', 'tipo', 'resultado', 'apiKeyId', 'usuarioId'];
 const TOM: Record<Download['resultado'], Tom> = { ok: 'sucesso', nao_encontrado: 'aviso', sem_pdf: 'aviso', erro: 'erro' };
 
 export function Downloads() {
   const { t, locale } = useIdioma();
   const mensagemErro = useMensagemErro();
+  // Corretores only see their own downloads: the user column/filter would always be them.
+  const admin = ehAdmin(useUsuarioAtual());
   const buscar = useCallback((q: URLSearchParams) => api.downloads(q), []);
   const { dados, erro, carregando, filtros, filtrar, irParaPagina } = useListagem(buscar);
   const [form, setForm] = useState(() => valoresIniciais(filtros, CAMPOS));
@@ -50,6 +54,7 @@ export function Downloads() {
             {(['ok', 'nao_encontrado', 'sem_pdf', 'erro'] as const).map((r) => <option key={r} value={r}>{t(`downloads.resultado.${r}`)}</option>)}
           </select>
         </label>
+        <CampoUsuario {...campo('usuarioId')} />
         <div className="filtros-acoes">
           <button type="submit" className="botao botao-primario">{t('comum.filtrar')}</button>
           <button type="button" className="botao" onClick={limpar}>{t('comum.limpar')}</button>
@@ -66,7 +71,7 @@ export function Downloads() {
                   <tr>
                     <th>{t('comum.quando')}</th><th>{t('downloads.protocolo')}</th><th>{t('downloads.tipo')}</th>
                     <th>{t('downloads.resultado')}</th><th className="num">{t('downloads.tamanho')}</th>
-                    <th className="num">{t('downloads.duracao')}</th><th>{t('comum.chave')}</th><th>{t('downloads.criadaPor')}</th>
+                    <th className="num">{t('downloads.duracao')}</th><th>{t('comum.chave')}</th>{admin && <th>{t('comum.usuario')}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -79,7 +84,7 @@ export function Downloads() {
                       <td className="num">{formatarBytes(d.tamanhoBytes, locale)}</td>
                       <td className="num">{formatarDuracao(d.duracaoMs, locale)}</td>
                       <td>{d.apiKey ? <>{d.apiKey.nome} <span className="sutil mono">{d.apiKey.prefixo}…</span></> : <span className="sutil">{t('comum.chaveRemovida')}</span>}</td>
-                      <td>{d.apiKey?.criadaPor?.nome ?? '—'}</td>
+                      {admin && <td>{d.usuario?.nome ?? '—'}</td>}
                     </tr>
                   ))}
                 </tbody>

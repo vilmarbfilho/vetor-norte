@@ -33,16 +33,18 @@ Only Caddy publishes ports. The images are multi-arch (tested on arm64; the Orac
 ```bash
 git clone <repo-url> ~/vetornorte && cd ~/vetornorte
 cp .env.example .env                       # root: database, domain, backup
-cp api/.env.example api/.env               # portal credentials, rate limit, keep-alive, retention
+cp api/.env.example api/.env               # portal URL, rate limit, portal sessions, retention
 cp dashboard/.env.example dashboard/.env   # session/login options
 chmod 600 .env api/.env dashboard/.env
 ```
 
 - Root `.env`: a strong URL-safe `POSTGRES_PASSWORD` (e.g. `openssl rand -hex 24`), `CPF_HMAC_CHAVE`
   (`openssl rand -hex 32`; never change it later, or old query history can't be searched by CPF), uncomment
-  `COMPOSE_PROFILES=producao`, `DOMINIO=vn.vlabs.com.br`, `BACKUP_HABILITADO=true` if wanted.
+  `COMPOSE_PROFILES=producao`, `DOMINIO=vn.vlabs.com.br`, `BACKUP_HABILITADO=true` if wanted, and
+  `CREDENCIAIS_CHAVE` (`openssl rand -base64 32`; keep a copy outside the VPS: without it the saved portal
+  passwords cannot be decrypted, also from backups).
 - `api/.env` and `dashboard/.env`: their `DATABASE_URL`, `HOST`, `PORT` (and `HEADLESS`, `COOKIE_SECURE`,
-  `PREFIXO_PUBLICO`, `CPF_HMAC_CHAVE`) are **overridden by the compose file**; you don't need to edit them.
+  `PREFIXO_PUBLICO`, `CPF_HMAC_CHAVE`, `CREDENCIAIS_CHAVE`) are **overridden by the compose file**; you don't need to edit them.
 
 ## 3. Start, users, logs
 
@@ -50,11 +52,22 @@ chmod 600 .env api/.env dashboard/.env
 docker compose up -d --build                    # first build takes a few minutes
 docker compose ps                               # api/dashboard "healthy"
 docker compose logs -f caddy                    # watch the certificate being issued
-docker compose exec dashboard npm run usuarios -- criar --nome "Name" --email someone@example.com
+docker compose exec dashboard npm run usuarios -- criar --nome "Name" --email someone@example.com --perfil admin
 ```
 
-Open `https://vn.vlabs.com.br`, log in and create API keys. Integrations call
-`https://vn.vlabs.com.br/broker/protocolos?cpf=...` with `Authorization: Bearer <key>`.
+Then open `https://vn.vlabs.com.br` and:
+
+1. Log in with that admin.
+2. **Portal credentials**: save your Broker portal e-mail/password, only if you will call the API yourself
+   (optional for admins).
+3. **Users**: create each corretor (a temporary password is shown once; they change it at the first login).
+   Choose the screens they can see and their API permissions ceiling. Each corretor saves their own portal
+   credentials, or you save them via the **Portal** action.
+4. **API keys**: create keys for each user (or let corretores create their own, if granted).
+
+Integrations call `https://vn.vlabs.com.br/broker/protocolos?cpf=...` with `Authorization: Bearer <key>`. The
+portal is used with the credentials of the key's owner: missing → `409 credenciais_nao_cadastradas`; refused
+by the portal → `409 credenciais_invalidas` (the user updates them in the dashboard; no retries until then).
 
 API key CLI (alternative to the dashboard): `docker compose exec api npm run chaves -- listar`.
 
@@ -68,6 +81,19 @@ docker image prune -f            # optional: remove old image layers
 
 When the `playwright` version in `api/package-lock.json` changes, update the `FROM` tag in `api/Dockerfile`
 to the same version.
+
+### Upgrading an installation from before profiles (single portal account in `api/.env`)
+
+The migration `20261118130000_profiles_and_portal_credentials` **deletes all API keys and all history**
+(error logs, query and download history; agreed with the owner). Existing users become **admins**.
+
+1. Optional: take a backup first (`docker compose exec backup sh /backup.sh agora`).
+2. Root `.env`: add `CREDENCIAIS_CHAVE=$(openssl rand -base64 32)` and keep a copy outside the VPS.
+3. `api/.env`: remove `PORTAL_EMAIL`, `PORTAL_SENHA`, `KEEPALIVE_HABILITADO`, `KEEPALIVE_INTERVALO_MINUTOS`
+   (no longer read). Optionally add `SESSAO_OCIOSA_MINUTOS` / `SESSOES_MAX` (defaults 15 / 5).
+4. `git pull && docker compose up -d --build`.
+5. In the dashboard: save the portal credentials, create the corretores, **create new API keys** and update
+   the integrations (n8n etc.) with them.
 
 ## 5. Backup
 
@@ -99,4 +125,9 @@ docker compose start api dashboard
 - Caddy access logs are disabled on purpose: API URLs contain CPFs.
 - The database port is bound to `127.0.0.1`; to inspect it remotely use an SSH tunnel
   (`ssh -L 5432:127.0.0.1:5432 vps`) or `docker compose exec postgres psql ...`.
-- Run a single `api` instance (one portal session per account).
+- Run a single `api` instance: it keeps one portal session per user (two instances would log the same portal
+  account in twice).
+- Memory: Chromium ~500 MB plus roughly 150–250 MB per open portal session (`SESSOES_MAX`, default 5; idle
+  sessions close after `SESSAO_OCIOSA_MINUTOS`). `docker stats` shows the real usage.
+- `CREDENCIAIS_CHAVE` must be the same for api and dashboard (the compose file passes the root value to both).
+  Losing it = every user must save their portal password again; backups don't help without it.

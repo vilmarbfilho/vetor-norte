@@ -41,6 +41,7 @@ export function Conta({ usuario, aoMudarIdioma }: { usuario: Usuario; aoMudarIdi
           <dl className="detalhes">
             <dt>{t('conta.nome')}</dt><dd>{usuario.nome}</dd>
             <dt>{t('conta.email')}</dt><dd>{usuario.email}</dd>
+            <dt>{t('usuarios.perfil')}</dt><dd>{t(`perfil.${usuario.perfil}`)}</dd>
             <dt>{t('idioma.rotulo')}</dt>
             <dd><SeletorIdioma aoMudar={aoMudarIdioma} /> <small className="sutil">{t('conta.idiomaAjuda')}</small></dd>
           </dl>

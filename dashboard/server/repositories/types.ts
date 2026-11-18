@@ -1,16 +1,25 @@
 // Data contracts used by the routes. Routes depend on these interfaces only, so HTTP tests use
 // in-memory fakes (server/tests/fakes.ts) and production uses PostgreSQL (the *.ts files next to this).
 
+import type { Perfil, Tela } from '../auth/access.ts';
 import type { Permissao } from '../auth/api-keys.ts';
 
 export type Idioma = 'pt' | 'en';
 export const IDIOMAS: readonly Idioma[] = ['pt', 'en'];
 
+/** Logged-in user, read from the database on every request (permission changes apply at once). */
 export interface Usuario {
   id: string;
   nome: string;
   email: string;
   idioma: Idioma;
+  perfil: Perfil;
+  /** Screens granted to a corretor (ignored for admins). */
+  telas: Tela[];
+  /** Ceiling for the user's API keys (ignored for admins). */
+  permissoesApi: Permissao[];
+  /** Temporary password set by an admin: everything but changing it is blocked. */
+  trocarSenha: boolean;
 }
 
 export interface RepositorioContas {
@@ -26,7 +35,7 @@ export interface RepositorioContas {
   definirIdioma(usuarioId: string, idioma: Idioma): Promise<void>;
   /** Current password hash (for the "change my password" check). */
   hashDaSenha(usuarioId: string): Promise<string | null>;
-  /** Sets a new password and ends every other session of the user (keeps `manterSessaoId`). */
+  /** Sets a new password (clears `trocarSenha`) and ends every other session of the user (keeps `manterSessaoId`). */
   alterarSenha(usuarioId: string, senhaHash: string, manterSessaoId: string): Promise<void>;
   purgarSessoesExpiradas(inatividadeMs: number): Promise<number>;
 }
@@ -61,6 +70,7 @@ export interface FiltrosLogs extends Paginacao {
   status?: number;
   busca?: string;
   apiKeyId?: string;
+  usuarioId?: string;
 }
 
 export interface LogErro {
@@ -73,6 +83,8 @@ export interface LogErro {
   mensagem: string;
   requestId: string | null;
   apiKey: ReferenciaChave | null;
+  /** User whose key made the request (API) or who was logged in (dashboard). */
+  usuario: ReferenciaUsuario | null;
 }
 
 export interface LogErroDetalhado extends LogErro {
@@ -86,6 +98,8 @@ export interface FiltrosDownloads extends Paginacao {
   tipo?: 'binario' | 'base64' | 'envio';
   resultado?: 'ok' | 'nao_encontrado' | 'sem_pdf' | 'erro';
   apiKeyId?: string;
+  /** Owner filter. Forced to the logged-in user for corretores. */
+  usuarioId?: string;
 }
 
 export interface Download {
@@ -97,8 +111,9 @@ export interface Download {
   resultado: 'ok' | 'nao_encontrado' | 'sem_pdf' | 'erro';
   tamanhoBytes: number | null;
   duracaoMs: number | null;
-  /** Key that made the request, and the user who created that key. */
-  apiKey: (ReferenciaChave & { criadaPor: ReferenciaUsuario | null }) | null;
+  apiKey: ReferenciaChave | null;
+  /** Owner of the key at request time. */
+  usuario: ReferenciaUsuario | null;
 }
 
 export interface FiltrosConsultas extends Paginacao {
@@ -110,6 +125,8 @@ export interface FiltrosConsultas extends Paginacao {
   protocolo?: string;
   resultado?: 'ok' | 'erro';
   apiKeyId?: string;
+  /** Owner filter. Forced to the logged-in user for corretores. */
+  usuarioId?: string;
 }
 
 /** One GET /protocolos call made to the API. */
@@ -125,7 +142,9 @@ export interface Consulta {
   quantidade: number | null;
   protocolos: string[];
   duracaoMs: number | null;
-  apiKey: (ReferenciaChave & { criadaPor: ReferenciaUsuario | null }) | null;
+  apiKey: ReferenciaChave | null;
+  /** Owner of the key at request time. */
+  usuario: ReferenciaUsuario | null;
 }
 
 export interface RegistroErroDashboard {
@@ -135,6 +154,8 @@ export interface RegistroErroDashboard {
   mensagem: string;
   detalhes?: Record<string, unknown>;
   requestId?: string;
+  /** Logged-in user, when there was one. */
+  usuarioId?: string | null;
 }
 
 export interface RepositorioMonitoramento {
@@ -155,6 +176,8 @@ export interface ChaveApiResumo {
   criadaEm: string;
   ultimoUsoEm: string | null;
   revogadaEm: string | null;
+  /** Owner: the API uses this user's permissions ceiling and portal credentials. */
+  dono: ReferenciaUsuario;
   criadaPor: ReferenciaUsuario | null;
   revogadaPor: ReferenciaUsuario | null;
 }
@@ -165,6 +188,7 @@ export interface NovaChave {
   hash: string;
   permissoes: Permissao[];
   limitePorMinuto: number | null;
+  usuarioId: string;
   criadoPor: string;
 }
 
@@ -181,15 +205,91 @@ export type ResultadoAlteracaoChave =
   | { tipo: 'revogada' };
 
 export interface RepositorioChaves {
-  listar(): Promise<ChaveApiResumo[]>;
+  /** All keys, or only the keys owned by `usuarioId`. */
+  listar(filtro?: { usuarioId?: string }): Promise<ChaveApiResumo[]>;
+  obter(id: string): Promise<ChaveApiResumo | null>;
   criar(nova: NovaChave): Promise<ChaveApiResumo>;
   /** Only active keys can be changed. */
   alterar(id: string, alteracao: AlteracaoChave): Promise<ResultadoAlteracaoChave>;
   revogar(id: string, usuarioId: string): Promise<ResultadoAlteracaoChave>;
 }
 
+/** A user as admins see it in user management. */
+export interface UsuarioResumo extends Usuario {
+  ativo: boolean;
+  criadoEm: string;
+  ultimoLogin: string | null;
+  /** Broker portal credentials status (null = not registered). */
+  credencialPortal: ResumoCredencial | null;
+}
+
+/**
+ * Broker portal credentials as the dashboard shows them. The password is never part of it.
+ * Status: 'nao_testada' (saved, not used yet), 'valida' (last portal login worked), 'invalida' (the portal
+ * rejected it: the API stops trying until it is updated). The API sets valida/invalida (stage 17).
+ */
+export type StatusCredencial = 'nao_testada' | 'valida' | 'invalida';
+
+export interface ResumoCredencial {
+  emailPortal: string;
+  status: StatusCredencial;
+  atualizadaEm: string;
+  atualizadaPor: ReferenciaUsuario | null;
+  ultimoLoginOkEm: string | null;
+  invalidadaEm: string | null;
+}
+
+export interface RepositorioCredenciais {
+  obter(usuarioId: string): Promise<ResumoCredencial | null>;
+  /**
+   * Creates or replaces the user's credentials (`senhaCifrada` from credentials-crypto.ts) and resets the
+   * status to 'nao_testada'. Returns null if the user does not exist.
+   */
+  salvar(c: { usuarioId: string; emailPortal: string; senhaCifrada: Buffer; atualizadaPor: string }): Promise<ResumoCredencial | null>;
+}
+
+export interface NovoUsuario {
+  nome: string;
+  email: string;
+  perfil: Perfil;
+  telas: Tela[];
+  permissoesApi: Permissao[];
+  /** Hash of the generated temporary password (the user must change it at the first login). */
+  senhaHash: string;
+}
+
+export interface AlteracaoUsuario {
+  nome?: string;
+  email?: string;
+  perfil?: Perfil;
+  telas?: Tela[];
+  permissoesApi?: Permissao[];
+}
+
+export type ResultadoUsuario =
+  | { tipo: 'ok'; usuario: UsuarioResumo }
+  | { tipo: 'nao_encontrado' }
+  | { tipo: 'email_em_uso' };
+
+export interface RepositorioUsuarios {
+  listar(): Promise<UsuarioResumo[]>;
+  obter(id: string): Promise<UsuarioResumo | null>;
+  criar(novo: NovoUsuario): Promise<ResultadoUsuario>;
+  /**
+   * Changes data and permissions. When the user ends up as a corretor, API permissions outside the new
+   * ceiling are also removed from their keys, permanently (granting them again does not restore them).
+   */
+  alterar(id: string, alteracao: AlteracaoUsuario): Promise<ResultadoUsuario>;
+  /** Deactivating ends the user's dashboard sessions (the API rejects their keys too). */
+  definirAtivo(id: string, ativo: boolean): Promise<ResultadoUsuario>;
+  /** New temporary password: sets `trocarSenha` and ends every session of the user. */
+  redefinirSenha(id: string, senhaHash: string): Promise<ResultadoUsuario>;
+}
+
 export interface Repositorios {
   contas: RepositorioContas;
+  usuarios: RepositorioUsuarios;
+  credenciais: RepositorioCredenciais;
   monitoramento: RepositorioMonitoramento;
   chaves: RepositorioChaves;
 }

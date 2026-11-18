@@ -18,14 +18,25 @@ interface LinhaLog {
   id: string; ocorrido_em: Date; origem: 'api' | 'dashboard'; metodo: string | null; rota: string | null;
   status_http: number | null; mensagem: string; request_id: string | null;
   chave_id: string | null; chave_nome: string | null; chave_prefixo: string | null;
+  usuario_id: string | null; usuario_nome: string | null;
   detalhes?: Record<string, unknown> | null;
+}
+
+/** Key and owner references shared by the three listings. */
+function referencias(l: {
+  chave_id: string | null; chave_nome: string | null; chave_prefixo: string | null;
+  usuario_id: string | null; usuario_nome: string | null;
+}) {
+  return {
+    apiKey: l.chave_id ? { id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo! } : null,
+    usuario: l.usuario_id ? { id: l.usuario_id, nome: l.usuario_nome! } : null,
+  };
 }
 
 function paraLog(l: LinhaLog): LogErro {
   return {
     id: l.id, ocorridoEm: l.ocorrido_em.toISOString(), origem: l.origem, metodo: l.metodo, rota: l.rota,
-    statusHttp: l.status_http, mensagem: l.mensagem, requestId: l.request_id,
-    apiKey: l.chave_id ? { id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo! } : null,
+    statusHttp: l.status_http, mensagem: l.mensagem, requestId: l.request_id, ...referencias(l),
   };
 }
 
@@ -41,6 +52,7 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     if (f.status) c.push(sql`l.status_http = ${f.status}`);
     if (f.busca) c.push(sql`(l.mensagem ILIKE ${'%' + f.busca + '%'} OR l.rota ILIKE ${'%' + f.busca + '%'})`);
     if (f.apiKeyId) c.push(sql`l.api_key_id = ${f.apiKeyId}`);
+    if (f.usuarioId) c.push(sql`l.usuario_id = ${f.usuarioId}`);
     const filtro = onde(sql, c);
 
     const [{ total }] = (await sql<{ total: number }[]>`
@@ -48,8 +60,11 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     `) as unknown as [{ total: number }];
     const linhas = await sql<LinhaLog[]>`
       SELECT l.id, l.ocorrido_em, l.origem, l.metodo, l.rota, l.status_http, l.mensagem, l.request_id,
-             k.id AS chave_id, k.nome AS chave_nome, k.prefixo AS chave_prefixo
-      FROM logs_erro l LEFT JOIN api_keys k ON k.id = l.api_key_id
+             k.id AS chave_id, k.nome AS chave_nome, k.prefixo AS chave_prefixo,
+             u.id AS usuario_id, u.nome AS usuario_nome
+      FROM logs_erro l
+      LEFT JOIN api_keys k ON k.id = l.api_key_id
+      LEFT JOIN usuarios u ON u.id = l.usuario_id
       WHERE ${filtro}
       ORDER BY l.ocorrido_em DESC, l.id DESC
       LIMIT ${f.porPagina} OFFSET ${(f.pagina - 1) * f.porPagina}
@@ -60,8 +75,11 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
   async obterLog(id: string): Promise<LogErroDetalhado | null> {
     const [l] = await this.sql<LinhaLog[]>`
       SELECT l.id, l.ocorrido_em, l.origem, l.metodo, l.rota, l.status_http, l.mensagem, l.request_id, l.detalhes,
-             k.id AS chave_id, k.nome AS chave_nome, k.prefixo AS chave_prefixo
-      FROM logs_erro l LEFT JOIN api_keys k ON k.id = l.api_key_id
+             k.id AS chave_id, k.nome AS chave_nome, k.prefixo AS chave_prefixo,
+             u.id AS usuario_id, u.nome AS usuario_nome
+      FROM logs_erro l
+      LEFT JOIN api_keys k ON k.id = l.api_key_id
+      LEFT JOIN usuarios u ON u.id = l.usuario_id
       WHERE l.id = ${id}
     `;
     return l ? { ...paraLog(l), detalhes: l.detalhes ?? null } : null;
@@ -76,6 +94,7 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     if (f.tipo) c.push(sql`d.tipo = ${f.tipo}`);
     if (f.resultado) c.push(sql`d.resultado = ${f.resultado}`);
     if (f.apiKeyId) c.push(sql`d.api_key_id = ${f.apiKeyId}`);
+    if (f.usuarioId) c.push(sql`d.usuario_id = ${f.usuarioId}`);
     const filtro = onde(sql, c);
 
     const [{ total }] = (await sql<{ total: number }[]>`
@@ -92,20 +111,14 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
              u.id AS usuario_id, u.nome AS usuario_nome
       FROM downloads_pdf d
       LEFT JOIN api_keys k ON k.id = d.api_key_id
-      LEFT JOIN usuarios u ON u.id = k.criado_por
+      LEFT JOIN usuarios u ON u.id = d.usuario_id
       WHERE ${filtro}
       ORDER BY d.ocorrido_em DESC, d.id DESC
       LIMIT ${f.porPagina} OFFSET ${(f.pagina - 1) * f.porPagina}
     `;
     const itens = linhas.map((l): Download => ({
       id: l.id, ocorridoEm: l.ocorrido_em.toISOString(), protocolo: l.protocolo, tipo: l.tipo, destino: l.destino,
-      resultado: l.resultado, tamanhoBytes: l.tamanho_bytes, duracaoMs: l.duracao_ms,
-      apiKey: l.chave_id
-        ? {
-            id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo!,
-            criadaPor: l.usuario_id ? { id: l.usuario_id, nome: l.usuario_nome! } : null,
-          }
-        : null,
+      resultado: l.resultado, tamanhoBytes: l.tamanho_bytes, duracaoMs: l.duracao_ms, ...referencias(l),
     }));
     return { itens, total, pagina: f.pagina, porPagina: f.porPagina };
   }
@@ -119,6 +132,7 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     if (f.protocolo) c.push(sql`q.protocolos @> ARRAY[${f.protocolo}]::text[]`);
     if (f.resultado) c.push(sql`q.resultado = ${f.resultado}`);
     if (f.apiKeyId) c.push(sql`q.api_key_id = ${f.apiKeyId}`);
+    if (f.usuarioId) c.push(sql`q.usuario_id = ${f.usuarioId}`);
     const filtro = onde(sql, c);
 
     const [{ total }] = (await sql<{ total: number }[]>`
@@ -135,7 +149,7 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
              u.id AS usuario_id, u.nome AS usuario_nome
       FROM consultas_protocolos q
       LEFT JOIN api_keys k ON k.id = q.api_key_id
-      LEFT JOIN usuarios u ON u.id = k.criado_por
+      LEFT JOIN usuarios u ON u.id = q.usuario_id
       WHERE ${filtro}
       ORDER BY q.ocorrido_em DESC, q.id DESC
       LIMIT ${f.porPagina} OFFSET ${(f.pagina - 1) * f.porPagina}
@@ -143,12 +157,7 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
     const itens = linhas.map((l): Consulta => ({
       id: l.id, ocorridoEm: l.ocorrido_em.toISOString(), cpfMascarado: l.cpf_mascarado, filtros: l.filtros,
       resultado: l.resultado, quantidade: l.quantidade, protocolos: l.protocolos, duracaoMs: l.duracao_ms,
-      apiKey: l.chave_id
-        ? {
-            id: l.chave_id, nome: l.chave_nome!, prefixo: l.chave_prefixo!,
-            criadaPor: l.usuario_id ? { id: l.usuario_id, nome: l.usuario_nome! } : null,
-          }
-        : null,
+      ...referencias(l),
     }));
     return { itens, total, pagina: f.pagina, porPagina: f.porPagina };
   }
@@ -158,9 +167,10 @@ export class RepositorioMonitoramentoPg implements RepositorioMonitoramento {
       ? Object.fromEntries(Object.entries(r.detalhes).map(([k, v]) => [k, typeof v === 'string' ? textoSeguro(v, 4000) : v]))
       : null;
     this.sql`
-      INSERT INTO logs_erro (origem, metodo, rota, status_http, mensagem, detalhes, request_id)
+      INSERT INTO logs_erro (origem, metodo, rota, status_http, mensagem, detalhes, request_id, usuario_id)
       VALUES ('dashboard', ${r.metodo}, ${r.rota}, ${r.statusHttp}, ${textoSeguro(r.mensagem)},
-              ${detalhes ? this.sql.json(detalhes as Record<string, string>) : null}, ${r.requestId ?? null})
+              ${detalhes ? this.sql.json(detalhes as Record<string, string>) : null}, ${r.requestId ?? null},
+              ${r.usuarioId ?? null})
     `.catch((e: Error) => console.warn(`[auditoria] falha ao gravar erro: ${e.message}`));
   }
 }

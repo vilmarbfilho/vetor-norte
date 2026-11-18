@@ -98,7 +98,8 @@ pre {
 
 @media (max-width: 860px) {
   /* minmax(0, 1fr): the nowrap menu must scroll inside the bar, not widen the page. */
-  .shell { grid-template-columns: minmax(0, 1fr); }
+  /* align-content: on short pages the rows must not stretch to fill 100vh (blank band under the menu). */
+  .shell { grid-template-columns: minmax(0, 1fr); align-content: start; }
   .lateral { min-width: 0; position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--borda); padding: 12px 16px; gap: 10px; }
   .menu { flex-direction: row; overflow-x: auto; }
   .menu-item { white-space: nowrap; }
@@ -145,6 +146,8 @@ tbody tr:last-child td { border-bottom: 0; }
 td.mensagem { min-width: 260px; max-width: 480px; overflow-wrap: anywhere; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .acoes { display: flex; gap: 12px; justify-content: flex-end; white-space: nowrap; }
+/* Many actions (users page): wrap instead of widening the table. */
+.acoes-quebra { flex-wrap: wrap; row-gap: 4px; max-width: 260px; margin-left: auto; }
 .lista-protocolos { display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 280px; }
 
 .paginacao {

@@ -3,10 +3,10 @@ import { api, type LogErro, type LogErroDetalhado } from '../api';
 import { Alerta, CabecalhoPagina, Carregando, Modal, Paginacao, Selo, useMensagemErro } from '../components/ui';
 import { formatarDataHora, primeiraLinha } from '../format';
 import { useIdioma } from '../i18n';
-import { FiltroChave } from './filters';
+import { CampoUsuario, FiltroChave } from './filters';
 import { useListagem, valoresIniciais } from './useListagem';
 
-const CAMPOS = ['de', 'ate', 'origem', 'status', 'busca', 'apiKeyId'];
+const CAMPOS = ['de', 'ate', 'origem', 'status', 'busca', 'apiKeyId', 'usuarioId'];
 
 function rotaDoLog(l: LogErro): string {
   return l.metodo || l.rota ? `${l.metodo ?? ''} ${l.rota ?? ''}`.trim() : '—';
@@ -56,6 +56,7 @@ export function Logs() {
           </select>
         </label>
         <label className="campo campo-curto"><span>{t('logs.status')}</span><input type="number" min={100} max={599} {...campo('status')} /></label>
+        <CampoUsuario {...campo('usuarioId')} />
         <label className="campo campo-largo"><span>{t('logs.busca')}</span><input type="search" maxLength={100} {...campo('busca')} /></label>
         <div className="filtros-acoes">
           <button type="submit" className="botao botao-primario">{t('comum.filtrar')}</button>
@@ -72,7 +73,7 @@ export function Logs() {
                 <thead>
                   <tr>
                     <th>{t('comum.quando')}</th><th>{t('logs.origem')}</th><th>{t('logs.status')}</th>
-                    <th>{t('logs.rota')}</th><th>{t('logs.mensagem')}</th><th>{t('comum.chave')}</th>
+                    <th>{t('logs.rota')}</th><th>{t('logs.mensagem')}</th><th>{t('comum.chave')}</th><th>{t('comum.usuario')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -84,6 +85,7 @@ export function Logs() {
                       <td className="mono">{rotaDoLog(l)}</td>
                       <td className="mensagem">{primeiraLinha(l.mensagem)}</td>
                       <td>{l.apiKey ? <span title={l.apiKey.prefixo}>{l.apiKey.nome}</span> : '—'}</td>
+                      <td>{l.usuario?.nome ?? '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -102,6 +104,7 @@ export function Logs() {
             <dd>{detalhe.detalhes?.origem === 'keepalive' ? t('logs.keepalive') : t(detalhe.origem === 'api' ? 'logs.origem.api' : 'logs.origem.dashboard')}</dd>
             <dt>{t('logs.status')}</dt><dd>{detalhe.statusHttp ?? '—'}</dd>
             <dt>{t('logs.rota')}</dt><dd className="mono">{rotaDoLog(detalhe)}</dd>
+            <dt>{t('comum.usuario')}</dt><dd>{detalhe.usuario?.nome ?? '—'}</dd>
             <dt>{t('comum.chave')}</dt><dd>{detalhe.apiKey ? `${detalhe.apiKey.nome} (${detalhe.apiKey.prefixo}…)` : '—'}</dd>
             <dt>{t('logs.requestId')}</dt><dd className="mono">{detalhe.requestId ?? '—'}</dd>
             <dt>{t('logs.mensagem')}</dt><dd><pre>{detalhe.mensagem}</pre></dd>
