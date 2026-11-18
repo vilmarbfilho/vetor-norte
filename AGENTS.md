@@ -15,6 +15,7 @@ vetornorte/
 ├── deploy/      Caddyfile, backup.sh and the VPS guide (deploy/README.md)
 ├── docker-compose.yml   dev: PostgreSQL + migrations; profile `producao`: + api, dashboard, caddy, backup
 ├── .env.example  root env for docker-compose (database credentials)
+├── README.md     project overview for humans (architecture, setup, config, deploy, security)
 ├── AGENTS.md     this file: monorepo-wide rules and roadmap
 └── CLAUDE.md     points to this file
 ```
