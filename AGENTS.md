@@ -65,6 +65,9 @@ All planned stages are complete. New work starts as a new stage, agreed with the
 - **Per-key permissions** (e.g. a key that can list protocols but not download PDFs).
 - **Rate limit per API key**, with an env flag to enable/disable it.
 - **LGPD**: CPF masked in logs, automatic retention (old records purged).
+- **Protocol query history** (2026-11-18): every GET /protocolos; CPF stored masked + HMAC (`CPF_HMAC_CHAVE`, same in
+  API and dashboard) for search by full CPF; filters, result, count + protocol numbers; retention 90 days
+  (`RETENCAO_CONSULTAS_DIAS`); own dashboard page. 401/403/429 are deliberately not logged (user's decision).
 - **Automatic database backup**, with an env toggle.
 - **Portal session keep-alive** (periodic light navigation), with an env toggle.
 
@@ -81,7 +84,8 @@ docker compose exec postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'   # 
 - New migration: add `db/migrations/<YYYYMMDDHHMMSS>_<name>.sql` with `-- migrate:up` and `-- migrate:down`
   sections. Never edit a migration that has already been applied anywhere; add a new one.
 - Tables (Portuguese names, like the code): `usuarios` (dashboard users), `api_keys` (only the SHA-256 hash of
-  the key is stored, plus a visible `prefixo`; revocation = `revogada_em`), `logs_erro`, `downloads_pdf`.
+  the key is stored, plus a visible `prefixo`; revocation = `revogada_em`), `logs_erro`, `downloads_pdf`,
+  `consultas_protocolos` (GET /protocolos history: masked CPF + HMAC, never the CPF), `sessoes`.
 - `api_keys.permissoes` accepts only `protocolos:listar`, `pdf:baixar`, `pdf:enviar` (CHECK constraint).
   Adding a permission requires a migration that changes the constraint.
 - History rows keep working when a key or user is deleted (`ON DELETE SET NULL`). Prefer revoking keys.
@@ -94,4 +98,5 @@ docker compose exec postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'   # 
 - Never print or persist credentials. Mask personal data in output and logs.
 - When testing against the local database, delete **only the rows you created** (filter by your test user/key).
   The user keeps their own test data there.
+- Test servers: always `HEADLESS=true` (the user's `api/.env` may say false: visible browser windows on their Mac).
 - Stop background servers by process (`pkill -f "tsx ..."`) and confirm with `ps`; `kill %1` can leave them running.

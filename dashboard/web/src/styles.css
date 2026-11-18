@@ -145,6 +145,7 @@ tbody tr:last-child td { border-bottom: 0; }
 td.mensagem { min-width: 260px; max-width: 480px; overflow-wrap: anywhere; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .acoes { display: flex; gap: 12px; justify-content: flex-end; white-space: nowrap; }
+.lista-protocolos { display: flex; flex-wrap: wrap; gap: 4px 10px; max-width: 280px; }
 
 .paginacao {
   display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;

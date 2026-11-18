@@ -12,8 +12,9 @@ import { criarApp } from './app.ts';
 
 let chamadasAoPortal = 0;
 const servicoFake: ServicoProtocolos = {
-  async listarPorCpf(_cpf, filtros) {
+  async listarPorCpf(cpf, filtros) {
     chamadasAoPortal++;
+    if (cpf.replace(/\D/g, '') === '11144477735') throw new Error('portal fora do ar');
     return aplicarFiltros(
       [protocoloFake({ protocolo: '10' }), protocoloFake({ protocolo: '11', pdfUrl: null, seguradora: 'Tokio' })],
       filtros,
@@ -199,6 +200,25 @@ test('histórico: cada pedido de PDF é registrado com tipo, resultado e chave',
     ],
   );
   assert.ok(auditoria.downloads.every((d) => d.duracaoMs >= 0));
+});
+
+test('histórico de consultas: CPF, filtros, protocolos retornados, resultado e chave', async () => {
+  auditoria.limpar();
+  await requisitar('/protocolos?cpf=529.982.247-25');
+  await requisitar('/protocolos?cpf=52998224725&seguradora=tokio');
+  await requisitar('/protocolos?cpf=111.444.777-35'); // portal failure
+  await requisitar('/protocolos?cpf=111.111.111-11'); // invalid CPF: 400, not history
+  await requisitar('/protocolos?cpf=52998224725&xpto=1'); // invalid query: 400 before the handler
+
+  assert.deepEqual(
+    auditoria.consultas.map((c) => [c.cpf, c.filtros, c.resultado, c.protocolos, c.apiKeyId]),
+    [
+      ['529.982.247-25', {}, 'ok', ['10', '11'], 'total'],
+      ['52998224725', { seguradora: 'tokio' }, 'ok', ['11'], 'total'],
+      ['111.444.777-35', {}, 'erro', [], 'total'],
+    ],
+  );
+  assert.ok(auditoria.consultas.every((c) => c.duracaoMs >= 0));
 });
 
 test('log de erro: só respostas 5xx, com rota modelo, chave e detalhes', async () => {

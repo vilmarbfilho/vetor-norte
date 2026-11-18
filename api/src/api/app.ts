@@ -168,7 +168,21 @@ export function criarApp(servico: ServicoProtocolos, opcoes: OpcoesApp): Fastify
       if (somenteDigitos(cpf).length !== 11 || !cpfValido(cpf)) {
         return reply.status(400).send({ erro: 'CPF inválido' });
       }
-      const protocolos = await servico.listarPorCpf(cpf, filtros);
+      // Query history (valid CPFs only: an invalid CPF is a caller mistake and reached nothing).
+      const inicio = performance.now();
+      const registrar = (resultado: 'ok' | 'erro', numeros: string[] = []) =>
+        auditoria.consulta({
+          cpf, filtros: { ...filtros }, resultado, protocolos: numeros,
+          duracaoMs: performance.now() - inicio, apiKeyId: req.chaveApi?.id ?? null,
+        });
+      let protocolos;
+      try {
+        protocolos = await servico.listarPorCpf(cpf, filtros);
+      } catch (e) {
+        registrar('erro');
+        throw e;
+      }
+      registrar('ok', protocolos.map((p) => p.protocolo));
       return { cpf: formatarCpf(cpf), total: protocolos.length, protocolos: protocolos.map((p) => paraResposta(p, prefixo)) };
     },
   );

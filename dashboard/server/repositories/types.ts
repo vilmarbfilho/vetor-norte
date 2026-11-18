@@ -101,6 +101,33 @@ export interface Download {
   apiKey: (ReferenciaChave & { criadaPor: ReferenciaUsuario | null }) | null;
 }
 
+export interface FiltrosConsultas extends Paginacao {
+  de?: string;
+  ate?: string;
+  /** HMAC of the CPF typed in the filter (computed by the route; the CPF itself never reaches the query). */
+  cpfHash?: string;
+  /** Calls that returned this protocol number. */
+  protocolo?: string;
+  resultado?: 'ok' | 'erro';
+  apiKeyId?: string;
+}
+
+/** One GET /protocolos call made to the API. */
+export interface Consulta {
+  id: string;
+  ocorridoEm: string;
+  /** e.g. 529.***.***-25 (the full CPF is not stored). */
+  cpfMascarado: string;
+  /** Listing filters used besides the CPF, or null. */
+  filtros: Record<string, string> | null;
+  resultado: 'ok' | 'erro';
+  /** Number of protocols returned (null on error). */
+  quantidade: number | null;
+  protocolos: string[];
+  duracaoMs: number | null;
+  apiKey: (ReferenciaChave & { criadaPor: ReferenciaUsuario | null }) | null;
+}
+
 export interface RegistroErroDashboard {
   metodo: string;
   rota: string | null;
@@ -114,6 +141,7 @@ export interface RepositorioMonitoramento {
   listarLogs(filtros: FiltrosLogs): Promise<Pagina<LogErro>>;
   obterLog(id: string): Promise<LogErroDetalhado | null>;
   listarDownloads(filtros: FiltrosDownloads): Promise<Pagina<Download>>;
+  listarConsultas(filtros: FiltrosConsultas): Promise<Pagina<Consulta>>;
   /** Writes a dashboard error to logs_erro (origem = 'dashboard'). Fire-and-forget, never throws. */
   registrarErro(registro: RegistroErroDashboard): void;
 }

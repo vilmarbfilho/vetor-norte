@@ -6,6 +6,8 @@ import { criarApp } from './app.ts';
 import { hashSenha } from './auth/passwords.ts';
 import { ChavesFake, ContasFake, MonitoramentoFake } from './tests/fakes.ts';
 
+const CHAVE_HMAC = 'k'.repeat(32);
+
 const SENHA = 'senha-de-teste-123';
 const CSRF = { 'x-requested-with': 'vetornorte-dashboard' };
 
@@ -21,6 +23,7 @@ async function montar() {
     repositorios: { contas, monitoramento, chaves },
     sessao: { cookieSeguro: true, inatividadeMs: 8 * 3_600_000, duracaoMaximaMs: 7 * 86_400_000 },
     login: { maxTentativas: 3, bloqueioMs: 15 * 60_000 },
+    chaveHmacCpf: CHAVE_HMAC,
   });
   const login = (email: string, senha: string) =>
     app.inject({ method: 'POST', url: '/api/auth/login', headers: CSRF, payload: { email, senha } });
@@ -79,7 +82,7 @@ test('CSRF: POST sem o cabeçalho -> 403', async () => {
 test('rotas protegidas: sem sessão ou com cookie inválido -> 401; health é público', async () => {
   const { app } = await montar();
   assert.equal((await app.inject('/api/health')).statusCode, 200);
-  for (const url of ['/api/auth/eu', '/api/logs', '/api/downloads', '/api/chaves']) {
+  for (const url of ['/api/auth/eu', '/api/logs', '/api/consultas', '/api/downloads', '/api/chaves']) {
     assert.equal((await app.inject(url)).statusCode, 401, url);
   }
   const r = await app.inject({ url: '/api/auth/eu', headers: { cookie: 'vn_sessao=falso' } });
@@ -171,6 +174,28 @@ test('logs e downloads: filtros validados e paginação padrão', async () => {
   assert.equal((await req('/api/downloads?resultado=talvez')).statusCode, 400);
 });
 
+test('consultas: CPF vira só o hash (igual ao da API), filtros validados', async () => {
+  const { logado, monitoramento } = await montar();
+  const req = await logado();
+  assert.equal((await req('/api/consultas')).statusCode, 200);
+  assert.deepEqual({ ...(monitoramento.ultimosFiltros as object) }, { pagina: 1, porPagina: 50 });
+
+  const r = await req('/api/consultas?cpf=529.982.247-25&protocolo=10&resultado=erro');
+  assert.equal(r.statusCode, 200);
+  const filtros = { ...(monitoramento.ultimosFiltros as Record<string, unknown>) };
+  // Same fixed vector as api/src/audit/audit.test.ts (key 'k' x 32): API and dashboard must agree.
+  assert.deepEqual(filtros, {
+    cpfHash: 'a9032b49a90d0833a723bdbc00b3d0d0875a34eb27db967b9f4a761416f694f4',
+    protocolo: '10', resultado: 'erro', pagina: 1, porPagina: 50,
+  });
+  await req('/api/consultas?cpf=52998224725');
+  assert.equal((monitoramento.ultimosFiltros as { cpfHash: string }).cpfHash, filtros.cpfHash);
+
+  assert.equal((await req('/api/consultas?cpf=123')).statusCode, 400);
+  assert.equal((await req('/api/consultas?resultado=sem_pdf')).statusCode, 400);
+  assert.equal((await req('/api/consultas?xpto=1')).statusCode, 400);
+});
+
 test('erro interno -> 500 genérico e registro no log de erros (origem dashboard)', async () => {
   const { logado, monitoramento } = await montar();
   const req = await logado();
@@ -223,6 +248,7 @@ test('frontend: /, rotas da SPA e assets; arquivo inexistente -> 404', async () 
   const comWeb = criarApp({
     repositorios: { contas: new ContasFake(), monitoramento: new MonitoramentoFake(), chaves: new ChavesFake() },
     sessao: { cookieSeguro: true, inatividadeMs: 1, duracaoMaximaMs: 1 }, login: { maxTentativas: 1, bloqueioMs: 1 },
+    chaveHmacCpf: CHAVE_HMAC,
     pastaWeb: pasta,
   });
   for (const url of ['/', '/logs', '/chaves?apiKeyId=x']) {

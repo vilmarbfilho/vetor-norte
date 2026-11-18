@@ -7,6 +7,7 @@ import { Link, useRota } from '../router';
 
 const ITENS: { caminho: string; texto: ChaveTexto }[] = [
   { caminho: '/logs', texto: 'nav.logs' },
+  { caminho: '/consultas', texto: 'nav.consultas' },
   { caminho: '/downloads', texto: 'nav.downloads' },
   { caminho: '/chaves', texto: 'nav.chaves' },
   { caminho: '/conta', texto: 'nav.conta' },

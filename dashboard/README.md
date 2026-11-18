@@ -4,6 +4,8 @@ Monitoring and administration dashboard for the Broker Protocol API (`../api`). 
 and lets the team:
 
 - view **error logs** recorded by the API (and by the dashboard itself);
+- view the **protocol query history**: every protocol listing made to the API (masked CPF, filters, which
+  protocols were returned, which key); searchable by full CPF;
 - view the **PDF download history**: which protocol, when, the result, and which API key (and the user who
   created that key) made the request;
 - **create, edit and revoke API keys** used to call the API.
@@ -33,6 +35,7 @@ cp .env.example .env      # set DATABASE_URL (same database as the API); chmod 6
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | PostgreSQL URL, e.g. `postgres://vetornorte:<password>@127.0.0.1:5432/vetornorte` |
+| `CPF_HMAC_CHAVE` | yes | — | Same value as in `api/.env`: lets the CPF filter of the query history find the API's hashes |
 | `PORT` | no | `3100` | HTTP port |
 | `HOST` | no | `127.0.0.1` | Bind address (in production only Caddy reaches it) |
 | `COOKIE_SECURE` | no | `true` | Session cookie only over HTTPS. `false` only for local http on browsers that need it (Safari) |
@@ -58,7 +61,8 @@ npm run dev:web    # Vite on http://localhost:5173, proxies /api to :3100
 Use `localhost` (not `127.0.0.1`) in the browser: browsers accept the `Secure` session cookie on
 `http://localhost`. Safari does not; use `COOKIE_SECURE=false` locally there.
 
-Pages: **Error logs** (filters, click a row for details/stack), **PDF downloads** (which key and who created it),
+Pages: **Error logs** (filters, click a row for details/stack), **Protocol queries** (the CPF filter is kept
+only in memory, never in the address bar; protocol numbers link to their PDF downloads), **PDF downloads** (which key and who created it),
 **API keys** (create, edit, revoke; links to that key's downloads/errors), **My account** (language, change
 password). The language selector is in the side bar and on the login page; after login the account's saved
 language wins. New users start in English.
@@ -106,6 +110,7 @@ protection), or it gets `403 {codigo: "csrf"}`.
 | `POST /api/auth/eu/senha` | Body `{senhaAtual, novaSenha}` → 204; ends the user's other sessions. `400 senha_atual_incorreta \| senha_curta \| senha_igual`, `429 login_bloqueado` |
 | `GET /api/logs` | Error logs, newest first. Query: `de`, `ate` (ISO date-time), `origem` (`api`/`dashboard`), `status`, `busca` (text), `apiKeyId`, `pagina`, `porPagina` (≤ 200) |
 | `GET /api/logs/:id` | One log, with `detalhes` (stack, masked URL...) |
+| `GET /api/consultas` | Protocol query history. Query: `de`, `ate`, `cpf` (full; only its HMAC is used), `protocolo` (calls that returned it), `resultado` (`ok`/`erro`), `apiKeyId`, `pagina`, `porPagina` |
 | `GET /api/downloads` | PDF history. Query: `de`, `ate`, `protocolo`, `tipo` (`binario`/`base64`/`envio`), `resultado` (`ok`/`nao_encontrado`/`sem_pdf`/`erro`), `apiKeyId`, `pagina`, `porPagina` |
 | `GET /api/chaves` | `{chaves, permissoesDisponiveis}` (never the secret nor its hash) |
 | `POST /api/chaves` | Body `{nome, permissoes[], limitePorMinuto?}` → `201 {chave, segredo}`. **`segredo` (the full key) is shown only here, once** |
@@ -155,6 +160,7 @@ server/
 ├── config/{load,env}.ts      # .env loading and validation
 ├── db/client.ts              # postgres.js connection
 ├── utils/mask.ts             # CPF masking (same rule as the API)
+├── utils/cpf-hash.ts         # CPF HMAC (same as api/src/audit/cpf-hash.ts)
 └── tests/fakes.ts            # in-memory repositories for tests
 web/
 ├── index.html, vite.config.ts, tsconfig.json
@@ -165,7 +171,7 @@ web/
     ├── format.ts             # dates, sizes, durations, date filters -> ISO
     ├── i18n/                 # en.ts (default), pt.ts, translate.ts, React provider
     ├── components/           # Layout (side bar), ui.tsx (Modal, Paginacao, Selo, Alerta...)
-    ├── pages/                # Login, Logs, Downloads, Keys, Account, useListagem (filters in the URL)
+    ├── pages/                # Login, Logs, Queries, Downloads, Keys, Account, useListagem (filters in the URL)
     └── styles.css            # color tokens (light/dark), responsive layout
 ```
 

@@ -38,10 +38,11 @@ cp dashboard/.env.example dashboard/.env   # session/login options
 chmod 600 .env api/.env dashboard/.env
 ```
 
-- Root `.env`: a strong URL-safe `POSTGRES_PASSWORD` (e.g. `openssl rand -hex 24`), uncomment
+- Root `.env`: a strong URL-safe `POSTGRES_PASSWORD` (e.g. `openssl rand -hex 24`), `CPF_HMAC_CHAVE`
+  (`openssl rand -hex 32`; never change it later, or old query history can't be searched by CPF), uncomment
   `COMPOSE_PROFILES=producao`, `DOMINIO=vn.vlabs.com.br`, `BACKUP_HABILITADO=true` if wanted.
 - `api/.env` and `dashboard/.env`: their `DATABASE_URL`, `HOST`, `PORT` (and `HEADLESS`, `COOKIE_SECURE`,
-  `PREFIXO_PUBLICO`) are **overridden by the compose file**; you don't need to edit them.
+  `PREFIXO_PUBLICO`, `CPF_HMAC_CHAVE`) are **overridden by the compose file**; you don't need to edit them.
 
 ## 3. Start, users, logs
 

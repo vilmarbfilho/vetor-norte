@@ -20,6 +20,8 @@ export interface OpcoesApp {
   logger?: boolean;
   /** Injectable for tests. */
   bloqueio?: BloqueioLogin;
+  /** CPF_HMAC_CHAVE: the API's key for CPF hashes in the protocol query history (search by CPF). */
+  chaveHmacCpf: string;
   /** Folder with the built frontend (web/dist). Not served when missing (e.g. tests, before `npm run build`). */
   pastaWeb?: string;
 }
@@ -116,7 +118,7 @@ export function criarApp(o: OpcoesApp): FastifyInstance {
       contas, cookieSeguro: o.sessao.cookieSeguro, duracaoMaximaMs: o.sessao.duracaoMaximaMs,
       bloqueio: o.bloqueio ?? new BloqueioLogin(o.login.maxTentativas, o.login.bloqueioMs),
     });
-    rotasMonitoramento(app, monitoramento);
+    rotasMonitoramento(app, monitoramento, o.chaveHmacCpf);
     rotasChaves(app, chaves);
   });
 

@@ -71,6 +71,8 @@ environment variables take precedence).
 | `KEEPALIVE_INTERVALO_MINUTOS` | no | `10` | Idle minutes before the keep-alive checks/renews the session |
 | `RETENCAO_LOGS_DIAS` | no | `90` | Error logs older than this are deleted (daily) |
 | `RETENCAO_DOWNLOADS_DIAS` | no | `365` | PDF download history older than this is deleted (daily) |
+| `RETENCAO_CONSULTAS_DIAS` | no | `90` | Protocol query history older than this is deleted (daily) |
+| `CPF_HMAC_CHAVE` | yes (server) | — | Secret (≥ 32 chars, `openssl rand -hex 32`) for CPF hashes in the query history. **Same value in `dashboard/.env`**. Do not change it after go-live |
 | `DESTINO_<NOME>_URL` | no | — | Creates a delivery destination named `<nome>` (lowercase, `_` → `-`). http/https only |
 | `DESTINO_<NOME>_TOKEN` | no | — | Sent to that destination as `Authorization: Bearer <token>` |
 | `DESTINO_<NOME>_TIMEOUT_MS` | no | `15000` | Delivery timeout for that destination |
@@ -139,7 +141,7 @@ npm run chaves -- revogar <prefixo>      # e.g. vn_AfafDxwV (shown by "listar")
 curl -H "Authorization: Bearer $CHAVE" "http://127.0.0.1:3000/protocolos?cpf=529.982.247-25"
 ```
 
-## Error log and download history
+## Error log, download history and query history
 
 The API records, in PostgreSQL (read by the dashboard):
 
@@ -149,12 +151,17 @@ The API records, in PostgreSQL (read by the dashboard):
 - **`downloads_pdf`**: every PDF request (`GET .../pdf` as `binario` or `base64`, and
   `POST .../pdf/envios` as `envio` with the destination), with the result (`ok`, `nao_encontrado`,
   `sem_pdf`, `erro`), size, duration and the API key that asked for it.
+- **`consultas_protocolos`**: every `GET /protocolos` call with a valid CPF: the CPF **masked**
+  (`529.***.***-25`) plus its keyed hash (HMAC-SHA256 with `CPF_HMAC_CHAVE`, so the dashboard can search by a
+  full CPF without the CPF being stored), the other filters, result (`ok`/`erro`), how many and which
+  protocol numbers were returned, duration and API key. Invalid CPFs (400) are not stored.
 
 Writes are asynchronous: a database failure is printed on the console and never fails the request.
 
 **LGPD**: CPFs are masked (`529.***.***-25`) in everything written to the database and in the console
-logs (request URLs, error messages). The download history does not store CPFs at all. Rows older than
-`RETENCAO_LOGS_DIAS` / `RETENCAO_DOWNLOADS_DIAS` are deleted at startup and then once a day.
+logs (request URLs, error messages). The download history does not store CPFs at all; the query history
+stores only the mask and the HMAC. Rows older than `RETENCAO_LOGS_DIAS` / `RETENCAO_DOWNLOADS_DIAS` /
+`RETENCAO_CONSULTAS_DIAS` are deleted at startup and then once a day.
 
 ## API reference
 

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   AlteracaoChave, ChaveApiResumo, Download, FiltrosDownloads, FiltrosLogs, Idioma, LogErro, LogErroDetalhado,
   NovaChave, Pagina, RegistroErroDashboard, RepositorioChaves, RepositorioContas, RepositorioMonitoramento,
-  ResultadoAlteracaoChave, Usuario,
+  ResultadoAlteracaoChave, Usuario, Consulta, FiltrosConsultas,
 } from '../repositories/types.ts';
 
 interface UsuarioFake extends Usuario { senhaHash: string; ativo: boolean }
@@ -63,6 +63,10 @@ export class MonitoramentoFake implements RepositorioMonitoramento {
     return this.logs.find((l) => l.id === id) ?? null;
   }
   async listarDownloads(f: FiltrosDownloads): Promise<Pagina<Download>> {
+    this.ultimosFiltros = f;
+    return { itens: [], total: 0, pagina: f.pagina, porPagina: f.porPagina };
+  }
+  async listarConsultas(f: FiltrosConsultas): Promise<Pagina<Consulta>> {
     this.ultimosFiltros = f;
     return { itens: [], total: 0, pagina: f.pagina, porPagina: f.porPagina };
   }

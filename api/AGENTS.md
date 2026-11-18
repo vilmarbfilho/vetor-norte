@@ -242,6 +242,7 @@ The body is validated with the `%PDF` magic bytes (an HTML body usually means th
 | `npm ci --omit=dev` broke runtime | `playwright`, `tsx`, `fastify` are **dependencies**. Keep it that way. |
 | Scratch scripts outside the package are CommonJS | Put them in `.dev/` (inside the package, git-ignored). |
 | `wait` in shell tests hangs when the server runs in the background | Wait for specific PIDs, then kill the server explicitly. |
+| A test API with a fake `PORTAL_URL` opened visible Chromium windows on the user's Mac (their `api/.env` has `HEADLESS=false`) | Always start test servers with `HEADLESS=true` explicitly, besides the fake `PORTAL_URL`. |
 | `kill %1` on a background `npm start` left the `tsx` child running (a test API kept writing keep-alive errors for 15 min) | Stop it with `pkill -f "tsx src/server.ts"` and check with `ps` that nothing is left. |
 
 ## 7. Debugging a portal change
