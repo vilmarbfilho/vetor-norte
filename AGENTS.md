@@ -14,7 +14,8 @@ real Chromium browser with **Playwright**.
 Endpoints (see README for the full contract):
 
 - `GET /protocolos?cpf=...&<filters>` — all insurance protocols of a CPF, filtered in memory.
-- `GET /protocolos/{protocolo}/pdf` — the protocol's "PDF da Proposta".
+- `GET /protocolos/{protocolo}/pdf[?formato=base64]` — the protocol's "PDF da Proposta" (binary or JSON).
+- `GET /destinos` / `POST /protocolos/{protocolo}/pdf/envios` — push the PDF to a configured destination.
 - `GET /health` — session status.
 
 ## 2. Working agreement with the project owner
@@ -28,6 +29,8 @@ Endpoints (see README for the full contract):
   1. Site reconnaissance (Playwright codegen) — `recordings/` (git-ignored).
   2. Standalone scraper CLI — `src/scripts/cli.ts`.
   3. HTTP API with persistent session — `src/server.ts`, `src/api`, `src/services`, `src/scraper/session.ts`.
+  4. Generic PDF delivery (base64 format + pluggable destinations) — `src/delivery`, `src/services/documents.ts`
+     (awaiting user confirmation).
 - **Do not commit** unless asked. The user commits themselves.
 - When the user authorizes it, you may run against the real portal (credentials are in `.env`).
   Prefer `HEADLESS=true`. Never print or persist credentials, and mask personal data in output.
@@ -74,6 +77,23 @@ src/scraper/portal.ts     Everything portal-specific: login, abrirBroker, overla
                           buscarProtocolos (URL building + pagination), extrairTabela (DOM parsing),
                           baixarPdfProposta. Change this file when the portal changes.
 ```
+
+Delivery (stage 4):
+
+```
+POST /protocolos/:n/pdf/envios
+   → services/documents.ts enviarPdf: check destino exists (before the browser)
+     → servico.obterPdf (inside the session queue)
+     → destino.enviar(Documento, PedidoEnvio)   (OUTSIDE the queue)
+src/delivery/types.ts     Destino interface, Documento, ErroEntrega (→ 502), arquivoEmJson
+src/delivery/webhook.ts   DestinoWebhook: POST JSON {evento, protocolo, destinatario, mensagem, referencia, arquivo{base64}}
+src/delivery/registry.ts  destinosDoAmbiente(env): DESTINO_<NOME>_URL/_TOKEN/_TIMEOUT_MS → Map<nome, Destino>
+```
+
+- To add a channel (e.g. native WhatsApp Cloud API, e-mail, S3): implement `Destino`, throw
+  `ErroEntrega` on failure, and register it in `registry.ts`. Routes and services stay untouched.
+- Destination URLs come **only from server config**, never from the request (no auth → SSRF/open relay risk).
+- Delivery must stay outside `SessaoBroker.executar`: a failing receiver must not trigger a portal re-login.
 
 Design rules:
 

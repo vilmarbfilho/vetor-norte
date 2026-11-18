@@ -4,7 +4,8 @@ Local HTTP API that automates the **Broker One** portal (Rede Lojacorr), which h
 It logs in with a real browser (Playwright), keeps the session open, and exposes:
 
 - a **listing** of insurance protocols for a CPF, with filters;
-- a **PDF download** ("PDF da Proposta") for a protocol number.
+- a **PDF download** ("PDF da Proposta") for a protocol number, as binary or base64 JSON;
+- a **generic PDF delivery** to configured destinations (webhooks: n8n, WhatsApp gateways, ...).
 
 > ⚠️ This API handles personal data (CPF, names) protected by Brazil's LGPD and has **no
 > authentication yet**. Keep it bound to `127.0.0.1` or behind an authenticated proxy/VPN.
@@ -56,6 +57,9 @@ environment variables take precedence).
 | `PORT` | no | `3000` | HTTP port |
 | `HOST` | no | `127.0.0.1` | Bind address. `0.0.0.0` exposes it on the network — only behind auth |
 | `DOWNLOAD_DIR` | no | `downloads` | Folder used by the CLI script and for error screenshots |
+| `DESTINO_<NOME>_URL` | no | — | Creates a delivery destination named `<nome>` (lowercase, `_` → `-`). http/https only |
+| `DESTINO_<NOME>_TOKEN` | no | — | Sent to that destination as `Authorization: Bearer <token>` |
+| `DESTINO_<NOME>_TIMEOUT_MS` | no | `15000` | Delivery timeout for that destination |
 
 `.env` is git-ignored. Never commit credentials.
 
@@ -156,6 +160,71 @@ curl -o proposta.pdf "http://127.0.0.1:3000/protocolos/12345678/pdf"
 
 - `200` — `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="proposta_<n>.pdf"`
 
+Add `?formato=base64` to get JSON instead (handy for low-code tools and messaging APIs that take base64):
+
+```bash
+curl "http://127.0.0.1:3000/protocolos/12345678/pdf?formato=base64"
+```
+
+```json
+{
+  "protocolo": "12345678",
+  "arquivo": { "nome": "proposta_12345678.pdf", "mimeType": "application/pdf", "tamanho": 183422, "base64": "JVBERi0xLjcK..." }
+}
+```
+
+### `GET /destinos`
+
+Lists the configured delivery destinations (names and kinds only, never URLs or tokens).
+
+```json
+{ "destinos": [ { "nome": "n8n", "tipo": "webhook" }, { "nome": "whatsapp", "tipo": "webhook" } ] }
+```
+
+### `POST /protocolos/{protocolo}/pdf/envios`
+
+Fetches the protocol's PDF and **pushes** it to a configured destination. The destination is
+chosen by name; its URL lives only in the server configuration (the API has no authentication,
+so callers can never point it at an arbitrary URL).
+
+| Body field | Required | Description |
+|---|---|---|
+| `destino` | yes | Destination name (see `GET /destinos`) |
+| `destinatario` | no | Channel-specific recipient (phone number, chat id, e-mail…), ≤ 100 chars |
+| `mensagem` | no | Text to send with the file (e.g. WhatsApp caption), ≤ 1000 chars |
+| `referencia` | no | Your correlation id, echoed to the destination and in the response, ≤ 100 chars |
+
+```bash
+curl -X POST "http://127.0.0.1:3000/protocolos/12345678/pdf/envios" \
+  -H 'Content-Type: application/json' \
+  -d '{"destino":"whatsapp","destinatario":"5511999999999","mensagem":"Segue sua proposta","referencia":"pedido-42"}'
+```
+
+```json
+{ "enviado": true, "destino": "whatsapp", "protocolo": "12345678",
+  "arquivo": { "nome": "proposta_12345678.pdf", "tamanho": 183422 }, "referencia": "pedido-42" }
+```
+
+The call is synchronous: `200` means the destination answered with a 2xx.
+
+**Webhook payload** (what the destination receives, `POST`, `Content-Type: application/json`):
+
+```json
+{
+  "evento": "protocolo.pdf_proposta",
+  "protocolo": "12345678",
+  "destinatario": "5511999999999",
+  "mensagem": "Segue sua proposta",
+  "referencia": "pedido-42",
+  "arquivo": { "nome": "proposta_12345678.pdf", "mimeType": "application/pdf", "tamanho": 183422, "base64": "JVBERi0xLjcK..." },
+  "enviadoEm": "2026-11-17T12:00:00.000Z"
+}
+```
+
+Missing optional fields are sent as `null`. To deliver to WhatsApp today, point a destination at a
+small flow (n8n, Make, your own service) that maps this payload to your WhatsApp provider's
+"send document" call. A native adapter can be added later (see `AGENTS.md`).
+
 ### Errors
 
 | Status | Body | When |
@@ -164,6 +233,8 @@ curl -o proposta.pdf "http://127.0.0.1:3000/protocolos/12345678/pdf"
 | `400` | `{"erro":"Parâmetros inválidos","detalhes":"..."}` | missing/unknown/malformed parameter |
 | `404` | `{"erro":"Protocolo não encontrado"}` | protocol number does not exist |
 | `404` | `{"erro":"Protocolo não possui PDF da Proposta"}` | protocol exists but has no PDF |
+| `400` | `{"erro":"Destino desconhecido","destinosDisponiveis":[...]}` | `destino` not configured (the portal is not called) |
+| `502` | `{"erro":"Falha ao entregar o PDF no destino","destino":"..."}` | destination unreachable, timed out or answered non-2xx |
 | `502` | `{"erro":"Falha ao consultar o portal. Tente novamente."}` | portal failed twice (the API already retried once with a fresh login) |
 
 ### Performance and concurrency
@@ -283,6 +354,10 @@ src/
 ├── api/app.ts                # Fastify routes, validation, error mapping
 ├── services/protocols.ts    # business logic (list by CPF, get PDF)
 ├── services/filters.ts      # in-memory listing filters
+├── services/documents.ts    # PDF -> Documento, delivery orchestration
+├── delivery/types.ts         # Destino contract, Documento, ErroEntrega
+├── delivery/webhook.ts       # generic webhook destination (JSON + base64)
+├── delivery/registry.ts      # builds destinations from DESTINO_* env vars
 ├── scraper/session.ts        # persistent logged-in browser, queue, retry
 ├── scraper/portal.ts         # all portal-specific automation (selectors, URLs, parsing)
 ├── config/env.ts             # environment loading/validation

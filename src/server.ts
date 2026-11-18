@@ -2,11 +2,14 @@
 
 import { criarApp } from './api/app.ts';
 import { config } from './config/env.ts';
+import { destinosDoAmbiente } from './delivery/registry.ts';
 import { SessaoBroker } from './scraper/session.ts';
 import { ServicoProtocolosBroker } from './services/protocols.ts';
 
+const destinos = destinosDoAmbiente(process.env);
 const sessao = new SessaoBroker(config);
-const app = criarApp(new ServicoProtocolosBroker(sessao), { logger: true });
+const app = criarApp(new ServicoProtocolosBroker(sessao), { logger: true, destinos });
+app.log.info(`Destinos de entrega: ${[...destinos.keys()].join(', ') || 'nenhum'}`);
 
 await app.listen({ port: config.porta, host: config.host });
 
