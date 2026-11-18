@@ -1,6 +1,14 @@
+# Patterns without a leading slash match in every package (api/, dashboard/).
 node_modules/
 .env
+# Build output (dashboard/web/dist)
+dist/
+# Database backups (personal data)
+backups/
+
+# api/: portal artifacts (PDFs, screenshots, recordings may contain personal data or credentials)
 downloads/
 recordings/
 .dev/
+
 *DS_Store

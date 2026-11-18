@@ -1,249 +1,97 @@
-# AGENTS.md
+# AGENTS.md (monorepo root)
 
-Context for AI coding agents (and humans) working on this repository.
-Read this before changing anything. User-facing docs are in [`README.md`](README.md).
+Context for AI coding agents (and humans) working on the `vetornorte` monorepo.
+Each package has its own, more detailed `AGENTS.md`. Read this file first, then the one of the package you touch.
 
 ---
 
-## 1. What this project is
+## 1. Layout
 
-A local HTTP API that automates the **Broker One** portal (`brokerone.com.br`, reached through the
-Rede Lojacorr access portal). The portal has **no public API**, so everything is done by driving a
-real Chromium browser with **Playwright**.
+```
+vetornorte/
+├── api/          Broker One automation API (Playwright + Fastify). See api/AGENTS.md and api/README.md
+├── dashboard/    Monitoring/admin dashboard: login, error logs, PDF download history, API keys. See dashboard/AGENTS.md
+├── db/migrations/  SQL migrations shared by API and dashboard (dbmate)
+├── deploy/      Caddyfile, backup.sh and the VPS guide (deploy/README.md)
+├── docker-compose.yml   dev: PostgreSQL + migrations; profile `producao`: + api, dashboard, caddy, backup
+├── .env.example  root env for docker-compose (database credentials)
+├── AGENTS.md     this file: monorepo-wide rules and roadmap
+└── CLAUDE.md     points to this file
+```
 
-Endpoints (see README for the full contract):
-
-- `GET /protocolos?cpf=...&<filters>` — all insurance protocols of a CPF, filtered in memory.
-- `GET /protocolos/{protocolo}/pdf[?formato=base64]` — the protocol's "PDF da Proposta" (binary or JSON).
-- `GET /destinos` / `POST /protocolos/{protocolo}/pdf/envios` — push the PDF to a configured destination.
-- `GET /health` — session status.
+Ownership rule: code related to the API lives in `api/`, code related to the dashboard lives in
+`dashboard/`. Only files that describe the whole project (compose file, root docs, root `.gitignore`)
+live at the root. Each package is an independent npm project (run `npm` commands inside the package folder).
 
 ## 2. Working agreement with the project owner
 
-- **Language**: talk to the user in **Brazilian Portuguese**. Code identifiers, log messages and
-  API error messages are in Portuguese. **Code comments**, `README.md` and `AGENTS.md` are in **English**.
-- **Step-by-step methodology**: work is done in sequential stages ("Etapas"). Explain the plan,
-  deliver modular code, say exactly how to test it, and **do not start the next stage until the user
-  confirms** the current one works on their machine.
-- Completed stages:
-  1. Site reconnaissance (Playwright codegen) — `recordings/` (git-ignored).
-  2. Standalone scraper CLI — `src/scripts/cli.ts`.
-  3. HTTP API with persistent session — `src/server.ts`, `src/api`, `src/services`, `src/scraper/session.ts`.
-  4. Generic PDF delivery (base64 format + pluggable destinations) — `src/delivery`, `src/services/documents.ts`
-     (awaiting user confirmation).
+- **Language**: talk to the user in **Brazilian Portuguese**. Code identifiers, log and API error messages
+  are in Portuguese. Code comments, `README.md` and `AGENTS.md` files are in **English**. File and folder
+  names are in English.
+- **Sequential stages ("Etapas")**: explain the plan, deliver modular code, say exactly how to test it, and
+  **do not start the next stage until the user confirms** the current one works on their machine.
+- **Never infer unclear requirements**: ask the user. Suggested improvements must be explained and approved
+  before being implemented.
 - **Do not commit** unless asked. The user commits themselves.
-- When the user authorizes it, you may run against the real portal (credentials are in `.env`).
-  Prefer `HEADLESS=true`. Never print or persist credentials, and mask personal data in output.
+- Expected usage: **2 people** use the whole solution for now. Prefer simple designs over scale.
 
-## 3. Stack and commands
+## 3. Stages
 
-| Item | Choice |
-|---|---|
-| Runtime | Node.js ≥ 22 (dev machine: Node 26), ESM (`"type": "module"`) |
-| Language | TypeScript 7, executed directly by `tsx` (no build step). `tsc` is only used for type checking |
-| Browser automation | Playwright (Chromium) |
-| HTTP | Fastify 5 (JSON-schema validation via Ajv) |
-| Tests | `node:test` + `node:assert`, run through `tsx --test` |
+Completed (see `api/AGENTS.md` for details): 1. site reconnaissance, 2. scraper CLI, 3. HTTP API,
+4. PDF delivery, 5. move the existing project into `api/` + root docs, 6. PostgreSQL + migrations, 7. API keys (permissions, rate limit),
+8. error log + PDF download history + CPF masking + retention, 9. portal session keep-alive,
+10. dashboard backend, 11. dashboard frontend, 12. Docker + Caddy (HTTPS) + DB backup.
+
+All planned stages are complete. New work starts as a new stage, agreed with the user first.
+
+## 4. Decisions taken
+
+- **Database**: PostgreSQL, shared by API and dashboard.
+- **Dashboard stack**: React + Vite SPA + its own Node/TypeScript backend with Fastify, in `dashboard/`.
+- **Dashboard login**: users created by CLI (`npm run usuarios`, hidden password prompt); scrypt; httpOnly cookie
+  sessions stored hashed in `sessoes` (8 h idle, 7 days max); 5 wrong passwords → 15 min block; all users are admins.
+- **Dashboard language**: en and pt, chosen per user in the UI (`usuarios.idioma`, default **en**).
+- **Own password change** in the dashboard (requires current password, ends other sessions); min. 10 characters.
+- **DB access library**: postgres.js (plain SQL, no ORM), in both packages.
+- **Migrations**: plain SQL in `db/migrations/`, applied by the one-shot `migrations` compose service (dbmate).
+- **Logs/history**: the API writes directly to PostgreSQL, asynchronously; a DB failure never fails the request.
+- **Reverse proxy**: Caddy with automatic HTTPS in the VPS compose file.
+- **Retention defaults**: 90 days for error logs, 1 year for PDF download history (configurable).
+- **Local Docker**: Colima on the dev machine (macOS); the VPS (Oracle Cloud, **ARM64**) already has Docker.
+- **Public URLs**: one domain, `vn.vlabs.com.br`: dashboard at `/`, API at `/broker/...` (Caddy strips the prefix).
+- **Compose profiles**: dev machine runs only postgres + migrations; the VPS sets `COMPOSE_PROFILES=producao`.
+- **Backup**: daily `pg_dump` into `./backups` on the VPS, keep 7, `BACKUP_HABILITADO` toggle. No off-site copy (user's choice).
+- **API keys**: stored hashed, can be created, managed and revoked from the dashboard.
+- **Per-key permissions** (e.g. a key that can list protocols but not download PDFs).
+- **Rate limit per API key**, with an env flag to enable/disable it.
+- **LGPD**: CPF masked in logs, automatic retention (old records purged).
+- **Automatic database backup**, with an env toggle.
+- **Portal session keep-alive** (periodic light navigation), with an env toggle.
+
+## 5. Database
 
 ```bash
-npm run dev        # API in watch mode
-npm start          # API
-npm test           # unit + HTTP tests (fake service, no browser)
-npm run typecheck  # tsc --noEmit — must be clean before handing work back
-npm run cli -- <cpf> [protocolo] | --protocolo <n>   # scraper CLI
-# `npm run etapa2 -- ...` is kept as an alias of `npm run cli -- ...`
+cp .env.example .env               # set a URL-safe POSTGRES_PASSWORD; chmod 600 .env
+docker compose up -d postgres      # PostgreSQL 17, data in the `pgdata` volume, port 127.0.0.1:5432
+docker compose run --rm migrations # apply pending migrations (idempotent)
+docker compose run --rm migrations --wait rollback   # undo the last migration
+docker compose exec postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB'   # SQL shell
 ```
 
-Imports between local files use explicit `.ts` extensions (`allowImportingTsExtensions`).
+- New migration: add `db/migrations/<YYYYMMDDHHMMSS>_<name>.sql` with `-- migrate:up` and `-- migrate:down`
+  sections. Never edit a migration that has already been applied anywhere; add a new one.
+- Tables (Portuguese names, like the code): `usuarios` (dashboard users), `api_keys` (only the SHA-256 hash of
+  the key is stored, plus a visible `prefixo`; revocation = `revogada_em`), `logs_erro`, `downloads_pdf`.
+- `api_keys.permissoes` accepts only `protocolos:listar`, `pdf:baixar`, `pdf:enviar` (CHECK constraint).
+  Adding a permission requires a migration that changes the constraint.
+- History rows keep working when a key or user is deleted (`ON DELETE SET NULL`). Prefer revoking keys.
 
-## 4. Architecture
+## 6. Security baseline (all packages)
 
-```
-HTTP request
-   │
-   ▼
-src/api/app.ts            Fastify routes. Validation (JSON schema + CPF check-digit), maps
-   │                      ResultadoPdf → 200/404, unknown errors → 502. Hides internal fields.
-   ▼
-src/services/protocols.ts    ServicoProtocolos interface + ServicoProtocolosBroker (real impl).
-   │                         listarPorCpf = buscarProtocolos(documento) + aplicarFiltros (filters.ts)
-   │                         obterPdf     = buscarProtocolos(protocolo) + baixarPdfProposta
-   ▼
-src/scraper/session.ts    SessaoBroker: one browser + one logged-in Broker tab.
-   │                      executar(op) runs ops in a FIFO queue (one at a time);
-   │                      on any error: discard session, re-login, retry ONCE.
-   ▼
-src/scraper/portal.ts     Everything portal-specific: login, abrirBroker, overlay handlers,
-                          buscarProtocolos (URL building + pagination), extrairTabela (DOM parsing),
-                          baixarPdfProposta. Change this file when the portal changes.
-```
-
-Delivery (stage 4):
-
-```
-POST /protocolos/:n/pdf/envios
-   → services/documents.ts enviarPdf: check destino exists (before the browser)
-     → servico.obterPdf (inside the session queue)
-     → destino.enviar(Documento, PedidoEnvio)   (OUTSIDE the queue)
-src/delivery/types.ts     Destino interface, Documento, ErroEntrega (→ 502), arquivoEmJson
-src/delivery/webhook.ts   DestinoWebhook: POST JSON {evento, protocolo, destinatario, mensagem, referencia, arquivo{base64}}
-src/delivery/registry.ts  destinosDoAmbiente(env): DESTINO_<NOME>_URL/_TOKEN/_TIMEOUT_MS → Map<nome, Destino>
-```
-
-- To add a channel (e.g. native WhatsApp Cloud API, e-mail, S3): implement `Destino`, throw
-  `ErroEntrega` on failure, and register it in `registry.ts`. Routes and services stay untouched.
-- Destination URLs come **only from server config**, never from the request (no auth → SSRF/open relay risk).
-- Delivery must stay outside `SessaoBroker.executar`: a failing receiver must not trigger a portal re-login.
-
-Design rules:
-
-- `portal.ts` knows the site but nothing about HTTP. `app.ts` knows HTTP but nothing about the site.
-- `criarApp(servico)` receives the service by injection, so HTTP tests use a fake `ServicoProtocolos`.
-- **Business outcomes are return values, technical failures are exceptions.** `obterPdf` returns
-  `{tipo:'nao_encontrado' | 'sem_pdf' | 'ok'}`; only real failures throw. This matters because
-  `SessaoBroker` retries on *any* exception, so never throw for "not found".
-- Validate input **before** touching the browser (invalid CPF → 400 in ~1 ms).
-- Never expose `pdfUrl`/`idInterno` (internal portal URLs) in API responses.
-
-## 5. Portal knowledge (hard-won — read before touching `portal.ts`)
-
-### Login and navigation
-1. `PORTAL_URL` (portalacesso.redelojacorr.com.br/login): textboxes "E-mail", "Senha", button "Entrar".
-   Login succeeded when a button whose name starts with "Broker" appears.
-2. Clicking that button opens the Broker in a **popup**. The popup goes through redirects
-   (`/broker-api/public/integrador/broker/<uuid>?...` → `https://brokerone.com.br/broker/menu.php`).
-   **Wait until the dashboard link "Protocolo" is visible** before navigating, or `page.goto`
-   fails with `net::ERR_ABORTED`.
-3. The dashboard link's accessible name is icon glyphs + "Protocolo". Use `/^\W*Protocolo$/`.
-   A loose `/Protocolo/` matches notification cards ("Protocolo não localizado no BrokerOne") and
-   "Protocolo Online".
-
-### Overlays (appear at unpredictable times)
-- `#colorbox` (jQuery Colorbox) with an iframe (notices, campaigns). Its iframe `name` is a
-  timestamp, so never select by it. Close it via the "Fechar" button inside the iframe, `#cboxClose`,
-  Escape, or, as a last resort, remove it from the DOM.
-- `.announcekit-widget-iframe-backdrop` (news widget) intercepts clicks.
-- Both are handled globally with `page.addLocatorHandler` in `registrarFechamentoDeOverlays`.
-
-### Search = plain GET form (do not fill the UI form)
-The CPF input in the UI is **cleared by the page during initialization** (AJAX combos reload),
-so `fill()` silently ends up empty and the search returns everything. Instead we navigate directly to:
-
-```
-https://brokerone.com.br/broker/buscaProtocolosNovo.php?busca=ok&...&page=N
-```
-
-Form fields (defaults in `PARAMETROS_PADRAO`):
-
-```
-busca=ok txtProdutor= txtCompanhia=0 txtRamo= txtNomeSegurado= txtTelefone= txtCpfSegurado=
-txtNrProtocolo= txtNrProposta= txtNrApolice= txtNrEndosso= txtDtVigenciaInicio= txtDtVigenciaFim=
-txtDtCadastroInicio= txtDtCadastroFim= txtStatusProtocolo= txtStatusProposta= txtNrSinistroBroker=
-txtNrSinistroSeguradora= txtPossuiSinistro= txtNrPlaca= txtNrChassi= txtCep=
-txtValorOrdem=lojacobr.protocolo.data txtOrdem=desc
-```
-
-- `txtCpfSegurado` **must be masked** (`529.982.247-25`). Digits only → 0 results. `formatarDocumento` handles CPF/CNPJ.
-- `txtNrProtocolo` works on its own (used by the PDF endpoint).
-- `txtNomeSegurado` returned 0 results in a test with a partial name. The expected format is unknown, so it is not exposed in the API.
-- Server-side select codes observed (may be useful for future server-side filters):
-  `txtCompanhia` numeric ids (`0`=all, `35`=Allianz…), `txtRamo` numeric ids (`1`=Automóvel…),
-  `txtStatusProtocolo` lowercase text values (`aguardando emissão`…), `txtStatusProposta` numeric ids,
-  `txtPossuiSinistro` = `Sim`/`Nao`, `txtValorOrdem` ∈ {`lojacobr.protocolo.nr_protocolo`, `.data`, `.vigencia`, `.vigenciaFim`}.
-- The result count is the text `"<N> resultados encontrados"` (`0 resultados encontrados` when empty).
-  The UI also uses "Sem resultados encontrados" elsewhere, so rely on the count.
-- Pagination: `&page=N`, **14 protocols per page**. `buscarProtocolos` loops until it has `N`
-  rows (cap `MAX_PAGINAS = 50`).
-- Without filters the Protocolo screen lists *recent protocols of other people* (~3000). Never treat
-  "a table appeared" as "my search finished". With a `documento` filter, `buscarProtocolos`
-  **aborts if any row belongs to another document** (privacy guard).
-
-### Result table structure (`extrairTabela`)
-- Each protocol is **one main `<tr>`** (contains the `button#demo-menu-lower-right_<idInterno>`)
-  followed by **detail rows** (`<td colspan=9>`) with "Pagamento / Prêmio", "Proposta: X Apolice: Y",
-  the sales hierarchy, and "Item: ..." rows.
-- Columns are located **by header text**, not by position. Headers: Protocolo, Data Protocolo,
-  Vigência Início, Vigência Fim, Segurado, Seguradora, Status protocolo, "Status proposta / Status
-  sinistro" (**one shared column**), menu.
-- Cell formats:
-  - Protocolo: `[NP] 12345678 <br> [TP] Principal` → `protocolo`, `tipo`.
-  - Segurado: `NAME <br> (529.982.247-25)` → `seguradoNome`, `seguradoDocumento`.
-  - Seguradora: `<img alt="Tokio Marine Seguradora"> <br> Ramo <br> Produto`.
-  - Status proposta/sinistro: first line = proposta, remaining lines = sinistro (assumption: no
-    real sinistro sample seen yet; `statusSinistro` has always been empty).
-- Row menu: `<ul for="demo-menu-lower-right_<id>">` with `<li onclick="window.open('<url>')">` items:
-  "Protocolo", **"PDF da Proposta"** (`/broker-api/public//protocolo/<id>/arquivo/<hash>.pdf`),
-  "Histórico do Protocolo", "Perfil do Segurado". Some protocols have no PDF item → `pdfUrl: null`.
-
-### PDF download
-`context.request.get(pdfUrl)` reuses the browser session cookies and follows the redirect to a
-**pre-signed S3 URL** (`broker-files.s3.amazonaws.com`, `X-Amz-Expires=600`). No clicking or popups are needed.
-The body is validated with the `%PDF` magic bytes (an HTML body usually means the session expired).
-
-## 6. Known pitfalls
-
-| Pitfall | Fix in place |
-|---|---|
-| `ReferenceError: __name is not defined` inside `page.evaluate` | `tsx`/esbuild wraps named inner functions with `__name()`, which doesn't exist in the browser. `prepararContexto(context)` injects a no-op `__name` via `addInitScript`. **Always call it right after `newContext()`.** |
-| `locator.isVisible({ timeout })` doesn't wait | Use `locator.waitFor({ state: 'visible', timeout })`. |
-| Codegen selectors with dynamic ids (`iframe[name="1794958818369"]`, `#demo-menu-lower-right_5695859`) | Use prefix selectors (`[id^="demo-menu-lower-right_"]`) or role/text selectors. |
-| `npm ci --omit=dev` broke runtime | `playwright`, `tsx`, `fastify` are **dependencies**. Keep it that way. |
-| Scratch scripts outside the package are CommonJS | Put them in `.dev/` (inside the package, git-ignored). |
-| `wait` in shell tests hangs when the server runs in the background | Wait for specific PIDs, then kill the server explicitly. |
-
-## 7. Debugging a portal change
-
-1. `HEADLESS=false npm run cli -- <cpf>` and watch the browser.
-2. On failure, the CLI saves full-page screenshots of every tab to `downloads/erros/`, and listings to
-   `downloads/debug/protocolos_<key>.json`. `htmlDosResultados()` returns the table HTML for inspection.
-3. Exploration scripts live in `.dev/` (git-ignored). Run them with `npx tsx .dev/<file>.ts`.
-   Log `request` events to discover the URLs the page calls.
-4. `npx playwright codegen <url>` records new flows. Store recordings in `recordings/` (git-ignored, may contain credentials).
-5. Add/adjust a unit test with the new HTML shape when possible.
-
-## 8. Testing expectations
-
-- Before handing work back: `npm run typecheck` clean and `npm test` green.
-- Unit tests must not touch the network or browser. Use `src/tests/fixtures.ts` (`protocoloFake`)
-  and a fake `ServicoProtocolos` with `app.inject(...)`.
-- End-to-end verification (only with user authorization): start the server with `HEADLESS=true PORT=<free port>`,
-  then run `curl` checks for listing, filters, empty CPF, invalid CPF (400), PDF (`%PDF` + headers),
-  unknown protocol (404) and concurrent requests. Then stop the server.
-- Never put real CPFs, names or credentials in committed files, tests or docs. Use synthetic valid CPFs
-  (e.g. `529.982.247-25`).
-
-## 9. Security and privacy
-
-- CPF and names are personal data (LGPD). `downloads/` (PDFs, debug JSON/HTML, screenshots) is
-  git-ignored, so keep it that way and avoid logging personal data beyond what is necessary.
-- `.env` holds portal credentials. It is git-ignored and should be `chmod 600` on servers.
-- The API has **no authentication**. The default bind is `127.0.0.1`. Do not change the default.
-- The CPF filter has a privacy guard (abort if a row belongs to another document). Do not remove it.
-
-## 10. Code conventions
-
-- Portuguese identifiers and messages (`buscarProtocolos`, `FiltrosListagem`, `erro`), matching the domain.
-- **File and folder names are in English** (`services/filters.ts`, `scraper/session.ts`, `tests/`).
-- Comments (`//`, JSDoc, `.env.example`) are written in **English**. Portal terms stay as they appear on the site
-  (e.g. "PDF da Proposta", "resultados encontrados").
-- Small single-purpose functions, each with a short comment explaining **why** (portal quirks).
-- Selectors: prefer role/text/attribute-prefix selectors. Never use codegen's dynamic ids.
-- Log with the `[portal]` / `[sessao]` prefixes (console). Fastify's logger is used for HTTP.
-- Keep filter logic pure (`aplicarFiltros`) and unit-tested.
-- Dates in API responses keep the portal format. Filter inputs accept `YYYY-MM-DD` or `DD/MM/YYYY`.
-
-## 11. Roadmap / open questions
-
-Options proposed to the user (pending a choice):
-
-- **Authentication** (API token) — required before exposing the API on a network.
-- **Scale**: pool of N sessions + job queue (e.g. BullMQ/Redis). Today it is one session with
-  serial processing (~20–60 ops/min). Confirm the portal tolerates concurrent sessions per account first.
-- **Docker** image (must include Chromium system deps, e.g. the `mcr.microsoft.com/playwright` base image).
-
-Known gaps:
-
-- `statusSinistro` parsing has not been validated with a protocol that has a claim (sinistro).
-- `txtNomeSegurado` (name search) format unknown.
-- CNPJ is accepted by the scraper (`formatarDocumento`) but the API only accepts CPF and does not validate CNPJ check digits.
-- Session expiry is handled reactively (retry on failure), with no proactive keep-alive.
+- `.env` files hold secrets, are git-ignored, and should be `chmod 600` on servers.
+- CPF and names are personal data (LGPD). Never put real personal data in committed files, tests or docs.
+  Use synthetic valid CPFs (e.g. `529.982.247-25`).
+- Never print or persist credentials. Mask personal data in output and logs.
+- When testing against the local database, delete **only the rows you created** (filter by your test user/key).
+  The user keeps their own test data there.
+- Stop background servers by process (`pkill -f "tsx ..."`) and confirm with `ps`; `kill %1` can leave them running.

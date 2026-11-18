@@ -1,0 +1,28 @@
+{
+  "name": "vetornorte",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "cli": "tsx src/scripts/cli.ts",
+    "chaves": "tsx src/scripts/keys.ts",
+    "etapa2": "npm run cli --"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "fastify": "^5.12.8",
+    "playwright": "^1.65.1",
+    "postgres": "^3.4.9",
+    "tsx": "^4.23.15"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

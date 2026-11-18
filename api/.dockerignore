@@ -1,0 +1,9 @@
+# Never send secrets, personal data or local artifacts to the image build.
+node_modules
+.env
+.env.*
+!.env.example
+downloads
+recordings
+.dev
+*.log

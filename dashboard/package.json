@@ -1,0 +1,35 @@
+{
+  "name": "vetornorte-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch server/server.ts",
+    "dev:web": "vite web",
+    "build": "vite build web",
+    "start": "tsx server/server.ts",
+    "test": "tsx --test \"server/**/*.test.ts\" \"web/src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "usuarios": "tsx server/scripts/users.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/static": "^10.1.11",
+    "fastify": "^5.12.8",
+    "postgres": "^3.4.9",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

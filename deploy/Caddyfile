@@ -1,0 +1,21 @@
+# Public entry point (HTTPS with automatic Let's Encrypt certificates for {$DOMINIO}).
+#   https://{$DOMINIO}/broker/...  -> API (prefix stripped: /broker/protocolos -> /protocolos)
+#   https://{$DOMINIO}/...         -> dashboard (UI + its /api)
+# Access logs are intentionally not enabled: request URLs carry CPFs (?cpf=...).
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	handle_path /broker/* {
+		reverse_proxy api:3000
+	}
+
+	handle {
+		reverse_proxy dashboard:3100
+	}
+}

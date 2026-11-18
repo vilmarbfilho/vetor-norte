@@ -1,0 +1,121 @@
+# Whole-project stack. Values come from the root .env (copy .env.example).
+#
+# Local development: only the database runs by default (`docker compose up -d`), API and dashboard run with npm.
+# VPS: set COMPOSE_PROFILES=producao in .env, then `docker compose up -d --build` starts everything:
+#   postgres + migrations + api + dashboard + caddy (HTTPS) + backup.
+# Only Caddy is reachable from the internet (ports 80/443). Everything else stays on the internal network.
+
+x-banco: &banco
+  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to localhost only: the database must never be reachable from the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot job: applies pending SQL migrations from db/migrations, then exits.
+  migrations:
+    image: ghcr.io/amacneil/dbmate:2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      DBMATE_NO_DUMP_SCHEMA: "true"
+    volumes:
+      - ./db:/db:ro
+    command: ["--wait", "up"]
+    restart: "no"
+
+  api:
+    profiles: ["producao"]
+    build: ./api
+    restart: unless-stopped
+    init: true # reaps Chromium's child processes
+    shm_size: 1gb # Chromium needs more than Docker's default 64 MB of /dev/shm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    # Portal credentials and API options (see api/.env.example). The values below override it.
+    env_file: ./api/.env
+    environment:
+      <<: *banco
+      HOST: 0.0.0.0
+      PORT: 3000
+      HEADLESS: "true"
+      PREFIXO_PUBLICO: /broker
+
+  dashboard:
+    profiles: ["producao"]
+    build: ./dashboard
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    env_file: ./dashboard/.env
+    environment:
+      <<: *banco
+      HOST: 0.0.0.0
+      PORT: 3100
+      COOKIE_SECURE: "true" # always behind HTTPS (Caddy)
+
+  caddy:
+    profiles: ["producao"]
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api, dashboard]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMINIO: ${DOMINIO:-} # required on the VPS: Caddy refuses to start without it
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates: keep this volume, or Let's Encrypt rate limits may bite
+      - caddy_config:/config
+
+  backup:
+    profiles: ["producao"]
+    image: postgres:17-alpine # same major version as the database (pg_dump compatibility)
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BACKUP_HABILITADO: ${BACKUP_HABILITADO:-false}
+      BACKUP_HORA: ${BACKUP_HORA:-03:00}
+      BACKUP_MANTER: ${BACKUP_MANTER:-7}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "/backup.sh"]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
